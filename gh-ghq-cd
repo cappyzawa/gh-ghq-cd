@@ -4,7 +4,6 @@ set -e
 function exist_command() {
   local c=$1
   if ! type -p ${c} >/dev/null; then
-    echo "${c} not found on the system" >&2
     return 1
   fi
   return 0
@@ -14,6 +13,7 @@ function check() {
   local required_command=(fzf ghq)
   for c in ${required_command[@]}; do
     if ! exist_command "${c}"; then
+      echo "${c} not found on the system" >&2
       exit 1
     fi
   done
