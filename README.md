@@ -16,8 +16,17 @@ gh extension install https://github.com/cappyzawa/gh-ghq-cd
 gh extension upgrade gh-ghq-cd
 ```
 
-## (Optional) Recommended Setting
+### (Optional) Recommended Setting
 
 ```bash
 gh alias set cd ghq-cd
+```
+
+## How to use
+
+```bash
+gh ghq-cd
+
+# If you set "cd" as an alias for ghq-cd
+gh cd
 ```
