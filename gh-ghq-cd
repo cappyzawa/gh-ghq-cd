@@ -19,14 +19,16 @@ function check() {
   done
 }
 
-function run() {
+function choose() {
   local cc="cat"
   if exist_command "bat"; then
     cc="bat"
   fi
-  repo_path=`ghq list --full-path | fzf --reverse --preview "${cc} {1}/README.md"`
-  \cd ${repo_path}
+  ghq list --full-path | fzf --reverse --preview "${cc} {1}/README.md"
 }
 
 check
-run
+selected="$(choose)"
+[ -n "${selected}" ] || exit 1
+\cd ${selected}
+$SHELL
