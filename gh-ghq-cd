@@ -1,29 +1,32 @@
 #!/bin/bash
 set -e
 
-function check_command() {
+function exist_command() {
   local c=$1
   if ! type -p ${c} >/dev/null; then
     echo "${c} not found on the system" >&2
-    exit 1
+    return 1
   fi
+  return 0
 }
 
 function check() {
   local required_command=(fzf ghq)
   for c in ${required_command[@]}; do
-    check_command(${c})
+    if ! exist_command "${c}"; then
+      exit 1
+    fi
   done
 }
 
 function run() {
   local cc="cat"
-  if ! type -p "bat" >/dev/null; then
+  if exist_command "bat"; then
     cc="bat"
   fi
   repo_path=`ghq list --full-path | fzf --reverse --preview "${cc} {1}/README.md"`
   \cd ${repo_path}
 }
 
-check()
-run()
+check
+run
