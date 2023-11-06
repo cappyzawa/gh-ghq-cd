@@ -31,4 +31,3 @@ check
 selected="$(choose)"
 [ -n "${selected}" ] || exit 1
 \cd ${selected}
-$SHELL
