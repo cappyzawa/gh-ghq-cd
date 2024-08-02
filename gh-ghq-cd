@@ -2,10 +2,13 @@
 set -e
 
 use_tmux=false
+new_window=false
+
+[ -n "${TMUX}" ] && use_tmux=true
 while [[ $# -gt 0 ]]; do
   case "$1" in
-  --tmux)
-    use_tmux=true
+  -nw)
+    $use_tmux && new_window=true
     shift
     ;;
   *)
@@ -31,10 +34,6 @@ function check() {
       exit 1
     fi
   done
-  if ${use_tmux} && ! exist_command "tmux"; then
-    echo "tmux not found on the system" >&2
-    exit 1
-  fi
 }
 
 function choose() {
@@ -51,9 +50,21 @@ function tmux_new_window() {
   tmux new-window -n "${repo}" -c "${dir}"
 }
 
+function tmux_op() {
+  local dir=$1
+  repo=$(basename "${dir}")
+  $new_window && tmux new-window -n "${repo}" -c "${dir}" && return
+  tmux rename-window "${repo}"
+}
+
 check
 selected="$(choose)"
 [ -n "${selected}" ] || exit 1
-$use_tmux && tmux_new_window "${selected}" && exit 0
+repo=$(basename "${selected}")
+if $new_window; then
+  tmux new-window -n "${repo}" -c "${selected}"
+  exit 0
+fi
 \cd ${selected}
+$use_tmux && tmux rename-window $repo
 $SHELL

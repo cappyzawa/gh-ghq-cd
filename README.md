@@ -31,5 +31,5 @@ gh ghq-cd
 gh cd
 
 # If you want to open the selected repository with tmux new window
-gh cd --tmux
+gh cd -nw
 ```
