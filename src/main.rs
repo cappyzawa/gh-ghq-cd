@@ -1,10 +1,13 @@
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use owo_colors::OwoColorize;
+use skim::prelude::*;
 use std::env;
+use std::fs;
+use std::io::Cursor;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 #[derive(Parser)]
 #[command(name = "gh-ghq-cd")]
@@ -46,9 +49,8 @@ fn main() -> Result<()> {
 
     // Check required commands
     check_command("ghq")?;
-    check_command("fzf")?;
 
-    // Select repository using fzf
+    // Select repository using skim
     let selected = select_repository()?;
 
     if selected.is_empty() {
@@ -83,39 +85,59 @@ fn check_command(cmd: &str) -> Result<()> {
     Ok(())
 }
 
-fn select_repository() -> Result<String> {
-    // Get preview command (bat or cat)
-    let preview_cmd = if which::which("bat").is_ok() {
-        "bat"
-    } else {
-        "cat"
+fn preview_readme(items: Vec<Arc<dyn SkimItem>>) -> Vec<AnsiString<'static>> {
+    let Some(item) = items.first() else {
+        return vec!["No item selected".to_string().into()];
     };
 
-    // Run ghq list --full-path
-    let ghq = Command::new("ghq")
+    let repo_path = item.output().to_string();
+    let readme_path = Path::new(&repo_path).join("README.md");
+
+    match fs::read_to_string(&readme_path) {
+        Ok(content) => {
+            let rendered = termimad::term_text(&content);
+            rendered.to_string().lines().map(AnsiString::parse).collect()
+        }
+        Err(_) => vec!["No README.md".to_string().into()],
+    }
+}
+
+fn select_repository() -> Result<String> {
+    // Run ghq list --full-path and collect output
+    let ghq_output = Command::new("ghq")
         .args(["list", "--full-path"])
-        .stdout(Stdio::piped())
-        .spawn()
+        .output()
         .context("failed to run ghq")?;
 
-    // Pipe to fzf
-    let fzf = Command::new("fzf")
-        .args([
-            "--reverse",
-            "--preview",
-            &format!(
-                "{} {{}}/README.md 2>/dev/null || echo 'No README.md'",
-                preview_cmd
-            ),
-        ])
-        .stdin(ghq.stdout.unwrap())
-        .stdout(Stdio::piped())
-        .spawn()
-        .context("failed to run fzf")?;
+    if !ghq_output.status.success() {
+        bail!("ghq list failed");
+    }
 
-    let output = fzf.wait_with_output().context("failed to wait for fzf")?;
+    let repositories = String::from_utf8_lossy(&ghq_output.stdout);
 
-    let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    // Configure skim options with Rust-based preview function
+    let options = SkimOptionsBuilder::default()
+        .reverse(true)
+        .preview_fn(Some(preview_readme.into()))
+        .build()
+        .context("failed to build skim options")?;
+
+    // Create item reader and feed repository list
+    let item_reader = SkimItemReader::default();
+    let items = item_reader.of_bufread(Cursor::new(repositories.into_owned()));
+
+    // Run skim fuzzy finder
+    let selected_items = Skim::run_with(&options, Some(items))
+        .filter(|out| !out.is_abort)
+        .map(|out| out.selected_items)
+        .unwrap_or_default();
+
+    // Get the selected repository path
+    let selected = selected_items
+        .first()
+        .map(|item| item.output().to_string())
+        .unwrap_or_default();
+
     Ok(selected)
 }
 

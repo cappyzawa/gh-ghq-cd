@@ -4,8 +4,6 @@
 
 - [`gh`](https://github.com/cli/cli) v2.0.0+
 - [`ghq`](https://github.com/x-motemen/ghq)
-- [`fzf`](https://github.com/junegunn/fzf)
-- (Optional) [`bat`](https://github.com/sharkdp/bat)
 
 ## How to install
 
