@@ -104,7 +104,7 @@ fn select_repository() -> Result<String> {
             "--reverse",
             "--preview",
             &format!(
-                "{} {{1}}/README.md 2>/dev/null || echo 'No README.md'",
+                "{} {{}}/README.md 2>/dev/null || echo 'No README.md'",
                 preview_cmd
             ),
         ])
