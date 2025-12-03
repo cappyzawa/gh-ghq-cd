@@ -40,7 +40,7 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     env:
-      ASSET_NAME: gh-ghq-cd_${{ github.ref_name }}_${{ matrix.os_label }}_${{ matrix.arch_label }}.tar.gz
+      ASSET_NAME: gh-ghq-cd-${{ matrix.os_label }}-${{ matrix.arch_label }}
     steps:
     - name: Checkout
       uses: actions/checkout@v6
@@ -62,11 +62,8 @@ jobs:
       if: matrix.os == 'ubuntu-latest'
       run: cross build --release --locked --target ${{ matrix.target }}
 
-    - name: Archive
-      run: |
-        cd target/${{ matrix.target }}/release
-        tar czvf ../../../${{ env.ASSET_NAME }} gh-ghq-cd
-        cd -
+    - name: Prepare binary
+      run: cp target/${{ matrix.target }}/release/gh-ghq-cd ${{ env.ASSET_NAME }}
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v5
@@ -82,14 +79,8 @@ jobs:
     - name: Download artifacts
       uses: actions/download-artifact@v6
 
-    - name: Generate checksums
-      run: |
-        for file in gh-ghq-cd_*/gh-ghq-cd_*; do
-          sha256sum "$file" | awk '{print $1}' > "${file}.sha256"
-        done
-
     - name: Create Release
       uses: softprops/action-gh-release@v2
       with:
-        files: gh-ghq-cd_*/gh-ghq-cd_*
+        files: gh-ghq-cd-*/gh-ghq-cd-*
         generate_release_notes: true
