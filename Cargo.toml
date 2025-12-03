@@ -1,0 +1,15 @@
+[package]
+name = "gh-ghq-cd"
+version = "0.0.1"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+clap = { version = "4.5.53", features = ["derive"] }
+owo-colors = "4.2.3"
+which = "8.0.0"
+
+[profile.release]
+strip = true
+lto = true
+opt-level = "z"
