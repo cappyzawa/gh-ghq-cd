@@ -2,12 +2,28 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 use owo_colors::OwoColorize;
 use skim::prelude::*;
+use std::borrow::Cow;
 use std::env;
 use std::fs;
-use std::io::Cursor;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
+
+/// Custom SkimItem that displays short path but returns full path
+struct RepoItem {
+    full_path: String,
+    display_path: String,
+}
+
+impl SkimItem for RepoItem {
+    fn text(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.display_path)
+    }
+
+    fn output(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.full_path)
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "gh-ghq-cd")]
@@ -96,13 +112,32 @@ fn preview_readme(items: Vec<Arc<dyn SkimItem>>) -> Vec<AnsiString<'static>> {
     match fs::read_to_string(&readme_path) {
         Ok(content) => {
             let rendered = termimad::term_text(&content);
-            rendered.to_string().lines().map(AnsiString::parse).collect()
+            rendered
+                .to_string()
+                .lines()
+                .map(AnsiString::parse)
+                .collect()
         }
         Err(_) => vec!["No README.md".to_string().into()],
     }
 }
 
 fn select_repository() -> Result<String> {
+    // Get ghq root paths (supports multiple roots)
+    let root_output = Command::new("ghq")
+        .args(["root", "--all"])
+        .output()
+        .context("failed to run ghq root")?;
+
+    if !root_output.status.success() {
+        bail!("ghq root failed");
+    }
+
+    let roots: Vec<String> = String::from_utf8_lossy(&root_output.stdout)
+        .lines()
+        .map(|s| s.to_string())
+        .collect();
+
     // Run ghq list --full-path and collect output
     let ghq_output = Command::new("ghq")
         .args(["list", "--full-path"])
@@ -113,7 +148,23 @@ fn select_repository() -> Result<String> {
         bail!("ghq list failed");
     }
 
-    let repositories = String::from_utf8_lossy(&ghq_output.stdout);
+    // Build RepoItem list with display paths (path without ghq root prefix)
+    let items: Vec<Arc<dyn SkimItem>> = String::from_utf8_lossy(&ghq_output.stdout)
+        .lines()
+        .map(|full_path| {
+            // Find matching root and strip it from full path
+            let display_path = roots
+                .iter()
+                .find_map(|root| full_path.strip_prefix(root))
+                .map(|stripped| stripped.trim_start_matches('/').to_string())
+                .unwrap_or_else(|| full_path.to_string());
+
+            Arc::new(RepoItem {
+                full_path: full_path.to_string(),
+                display_path,
+            }) as Arc<dyn SkimItem>
+        })
+        .collect();
 
     // Configure skim options with Rust-based preview function
     let options = SkimOptionsBuilder::default()
@@ -122,17 +173,20 @@ fn select_repository() -> Result<String> {
         .build()
         .context("failed to build skim options")?;
 
-    // Create item reader and feed repository list
-    let item_reader = SkimItemReader::default();
-    let items = item_reader.of_bufread(Cursor::new(repositories.into_owned()));
+    // Create receiver for items
+    let (tx, rx): (SkimItemSender, SkimItemReceiver) = unbounded();
+    for item in items {
+        let _ = tx.send(item);
+    }
+    drop(tx);
 
     // Run skim fuzzy finder
-    let selected_items = Skim::run_with(&options, Some(items))
+    let selected_items = Skim::run_with(&options, Some(rx))
         .filter(|out| !out.is_abort)
         .map(|out| out.selected_items)
         .unwrap_or_default();
 
-    // Get the selected repository path
+    // Get the selected repository path (full path from output())
     let selected = selected_items
         .first()
         .map(|item| item.output().to_string())
