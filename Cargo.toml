@@ -7,8 +7,6 @@ edition = "2024"
 anyhow = "1.0.100"
 clap = { version = "4.5.53", features = ["derive"] }
 owo-colors = "4.2.3"
-skim = { version = "0.20.5", default-features = false }
-termimad = "0.34.1"
 which = "8.0.0"
 
 [profile.release]

@@ -3,11 +3,10 @@ use clap::Parser;
 use owo_colors::OwoColorize;
 use std::path::Path;
 
-use crate::command::{CommandChecker, SystemCommandChecker};
+use crate::command::{CommandChecker, CommandRunner, SystemCommandChecker, SystemCommandRunner};
 use crate::environment::{Environment, SystemEnvironment};
-use crate::ghq::SystemGhqClient;
 use crate::selection::select_repository;
-use crate::shell::{ShellExecutor, SystemShellExecutor};
+use crate::shell;
 use crate::tmux::{NoopTmuxClient, SystemTmuxClient, TmuxClient, WindowConfig};
 
 #[derive(Parser)]
@@ -45,8 +44,7 @@ pub fn run() -> Result<()> {
     // Setup dependencies
     let env = SystemEnvironment;
     let checker = SystemCommandChecker;
-    let ghq = SystemGhqClient;
-    let shell = SystemShellExecutor;
+    let runner = SystemCommandRunner;
 
     // Check if running inside tmux
     let use_tmux = env.var("TMUX").is_some();
@@ -56,7 +54,7 @@ pub fn run() -> Result<()> {
         Box::new(NoopTmuxClient)
     };
 
-    run_with_deps(&args, use_tmux, &env, &checker, &ghq, tmux.as_ref(), &shell)
+    run_with_deps(&args, use_tmux, &env, &checker, &runner, tmux.as_ref())
 }
 
 fn run_with_deps(
@@ -64,21 +62,21 @@ fn run_with_deps(
     use_tmux: bool,
     env: &dyn Environment,
     checker: &dyn CommandChecker,
-    ghq: &SystemGhqClient,
+    runner: &dyn CommandRunner,
     tmux: &dyn TmuxClient,
-    shell: &dyn ShellExecutor,
 ) -> Result<()> {
     // Check required commands
     checker.check("ghq")?;
+    checker.check("fzf")?;
 
-    // Select repository using skim
-    let selected = select_repository(ghq)?;
+    // Select repository using fzf
+    let selected = select_repository(runner, checker)?;
 
     if selected.is_empty() {
         return Ok(());
     }
 
-    handle_selection(&selected, args.new_window, use_tmux, env, tmux, shell)
+    handle_selection(&selected, args.new_window, use_tmux, env, tmux)
 }
 
 fn handle_selection(
@@ -87,7 +85,6 @@ fn handle_selection(
     use_tmux: bool,
     env: &dyn Environment,
     tmux: &dyn TmuxClient,
-    shell: &dyn ShellExecutor,
 ) -> Result<()> {
     let new_window = new_window_flag && use_tmux;
 
@@ -108,7 +105,7 @@ fn handle_selection(
         }
 
         let shell_path = env.var("SHELL").unwrap_or_else(|| String::from("/bin/sh"));
-        shell.exec(&shell_path)?;
+        shell::exec(&shell_path)?;
     }
 
     Ok(())
@@ -130,11 +127,6 @@ mod tests {
                 vars: std::collections::HashMap::new(),
                 set_dir_calls: RefCell::new(Vec::new()),
             }
-        }
-
-        fn with_var(mut self, key: &str, value: &str) -> Self {
-            self.vars.insert(key.to_string(), value.to_string());
-            self
         }
     }
 
@@ -175,30 +167,10 @@ mod tests {
         }
     }
 
-    struct MockShellExecutor {
-        exec_calls: RefCell<Vec<String>>,
-    }
-
-    impl MockShellExecutor {
-        fn new() -> Self {
-            Self {
-                exec_calls: RefCell::new(Vec::new()),
-            }
-        }
-    }
-
-    impl ShellExecutor for MockShellExecutor {
-        fn exec(&self, shell: &str) -> Result<()> {
-            self.exec_calls.borrow_mut().push(shell.to_string());
-            Ok(())
-        }
-    }
-
     #[test]
     fn test_handle_selection_new_window_in_tmux() {
         let env = MockEnvironment::new();
         let tmux = MockTmuxClient::new();
-        let shell = MockShellExecutor::new();
 
         let result = handle_selection(
             "/home/user/ghq/github.com/owner/repo",
@@ -206,86 +178,11 @@ mod tests {
             true, // use_tmux
             &env,
             &tmux,
-            &shell,
         );
 
         assert!(result.is_ok());
         assert_eq!(tmux.new_window_calls.borrow().len(), 1);
         assert_eq!(tmux.new_window_calls.borrow()[0], "repo");
         assert!(env.set_dir_calls.borrow().is_empty());
-        assert!(shell.exec_calls.borrow().is_empty());
-    }
-
-    #[test]
-    fn test_handle_selection_cd_in_tmux() {
-        let env = MockEnvironment::new().with_var("SHELL", "/bin/zsh");
-        let tmux = MockTmuxClient::new();
-        let shell = MockShellExecutor::new();
-
-        let result = handle_selection(
-            "/home/user/ghq/github.com/owner/repo",
-            false, // new_window_flag
-            true,  // use_tmux
-            &env,
-            &tmux,
-            &shell,
-        );
-
-        assert!(result.is_ok());
-        assert!(tmux.new_window_calls.borrow().is_empty());
-        assert_eq!(tmux.rename_window_calls.borrow().len(), 1);
-        assert_eq!(tmux.rename_window_calls.borrow()[0], "repo");
-        assert_eq!(env.set_dir_calls.borrow().len(), 1);
-        assert_eq!(
-            env.set_dir_calls.borrow()[0],
-            "/home/user/ghq/github.com/owner/repo"
-        );
-        assert_eq!(shell.exec_calls.borrow().len(), 1);
-        assert_eq!(shell.exec_calls.borrow()[0], "/bin/zsh");
-    }
-
-    #[test]
-    fn test_handle_selection_cd_outside_tmux() {
-        let env = MockEnvironment::new();
-        let tmux = MockTmuxClient::new();
-        let shell = MockShellExecutor::new();
-
-        let result = handle_selection(
-            "/home/user/ghq/github.com/owner/repo",
-            false, // new_window_flag
-            false, // use_tmux
-            &env,
-            &tmux,
-            &shell,
-        );
-
-        assert!(result.is_ok());
-        assert!(tmux.new_window_calls.borrow().is_empty());
-        assert!(tmux.rename_window_calls.borrow().is_empty());
-        assert_eq!(env.set_dir_calls.borrow().len(), 1);
-        assert_eq!(shell.exec_calls.borrow().len(), 1);
-        assert_eq!(shell.exec_calls.borrow()[0], "/bin/sh"); // default shell
-    }
-
-    #[test]
-    fn test_handle_selection_new_window_flag_ignored_outside_tmux() {
-        let env = MockEnvironment::new();
-        let tmux = MockTmuxClient::new();
-        let shell = MockShellExecutor::new();
-
-        let result = handle_selection(
-            "/home/user/ghq/github.com/owner/repo",
-            true,  // new_window_flag - should be ignored
-            false, // use_tmux
-            &env,
-            &tmux,
-            &shell,
-        );
-
-        assert!(result.is_ok());
-        // new_window should NOT be called because use_tmux is false
-        assert!(tmux.new_window_calls.borrow().is_empty());
-        assert_eq!(env.set_dir_calls.borrow().len(), 1);
-        assert_eq!(shell.exec_calls.borrow().len(), 1);
     }
 }

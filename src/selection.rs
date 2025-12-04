@@ -1,34 +1,106 @@
 use anyhow::{Context, Result};
-use skim::prelude::*;
-use std::borrow::Cow;
-use std::fs;
-use std::path::Path;
-use std::sync::Arc;
+use std::io::Write;
+use std::process::{Command, Stdio};
 
-use crate::ghq::GhqClient;
+use crate::command::{CommandChecker, CommandRunner};
+use crate::ghq;
 
-/// Custom SkimItem that displays short path but returns full path
-struct RepoItem {
-    full_path: String,
-    display_path: String,
+/// Available preview viewers for README display
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewViewer {
+    Bat,
+    Cat,
 }
 
-impl SkimItem for RepoItem {
-    fn text(&self) -> Cow<'_, str> {
-        Cow::Borrowed(&self.display_path)
+impl PreviewViewer {
+    /// Detect the best available viewer
+    /// Priority: bat > cat
+    pub fn detect(checker: &dyn CommandChecker) -> Self {
+        if checker.check("bat").is_ok() {
+            Self::Bat
+        } else {
+            Self::Cat
+        }
     }
 
-    fn output(&self) -> Cow<'_, str> {
-        Cow::Borrowed(&self.full_path)
+    /// Generate the preview command for fzf
+    /// The `{}` placeholder will be replaced with the path
+    pub fn command(&self) -> &'static str {
+        match self {
+            Self::Bat => {
+                "bat --style=plain --color=always {}/README.md 2>/dev/null || echo 'No README.md'"
+            }
+            Self::Cat => "cat {}/README.md 2>/dev/null || echo 'No README.md'",
+        }
     }
 }
 
-/// Select a repository interactively using skim fuzzy finder
-pub fn select_repository(ghq: &dyn GhqClient) -> Result<String> {
-    let roots = ghq.roots()?;
-    let repos = ghq.list_full_path()?;
+/// Represents an item that can be displayed and selected
+struct SelectableItem {
+    display: String,
+    value: String,
+}
 
-    let items: Vec<Arc<dyn SkimItem>> = repos
+/// Run fzf with the given items and preview command
+fn run_fzf(items: &[SelectableItem], preview_cmd: &str) -> Result<Option<String>> {
+    let mut cmd = Command::new("fzf");
+
+    // Use tab as delimiter, show only first field (display)
+    cmd.arg("--delimiter=\t")
+        .arg("--with-nth=1")
+        .arg("--reverse");
+
+    // {2} refers to the second tab-separated field (full_path)
+    let preview_script = preview_cmd.replace("{}", "{2}");
+    cmd.arg("--preview").arg(&preview_script);
+
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
+
+    let mut child = cmd.spawn().context("failed to spawn fzf")?;
+
+    // Write items to stdin: display\tvalue
+    {
+        let stdin = child.stdin.as_mut().context("failed to get stdin")?;
+        for item in items {
+            writeln!(stdin, "{}\t{}", item.display, item.value)?;
+        }
+    }
+
+    let output = child.wait_with_output().context("failed to wait for fzf")?;
+
+    if !output.status.success() {
+        // fzf returns non-zero on abort (Ctrl-C, Esc)
+        return Ok(None);
+    }
+
+    let selected = String::from_utf8_lossy(&output.stdout);
+    let selected = selected.trim();
+
+    if selected.is_empty() {
+        return Ok(None);
+    }
+
+    // Extract value (second field) from selected line
+    let value = selected
+        .split('\t')
+        .nth(1)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| selected.to_string());
+
+    Ok(Some(value))
+}
+
+/// Select a repository interactively using fzf
+pub fn select_repository(
+    runner: &dyn CommandRunner,
+    checker: &dyn CommandChecker,
+) -> Result<String> {
+    let roots = ghq::roots(runner)?;
+    let repos = ghq::list_full_path(runner)?;
+
+    let items: Vec<SelectableItem> = repos
         .iter()
         .map(|full_path| {
             let display_path = roots
@@ -37,57 +109,16 @@ pub fn select_repository(ghq: &dyn GhqClient) -> Result<String> {
                 .map(|stripped| stripped.trim_start_matches('/').to_string())
                 .unwrap_or_else(|| full_path.to_string());
 
-            Arc::new(RepoItem {
-                full_path: full_path.to_string(),
-                display_path,
-            }) as Arc<dyn SkimItem>
+            SelectableItem {
+                display: display_path,
+                value: full_path.to_string(),
+            }
         })
         .collect();
 
-    let options = SkimOptionsBuilder::default()
-        .reverse(true)
-        .preview_fn(Some(preview_readme.into()))
-        .build()
-        .context("failed to build skim options")?;
+    let viewer = PreviewViewer::detect(checker);
+    let selected = run_fzf(&items, viewer.command())?;
 
-    let (tx, rx): (SkimItemSender, SkimItemReceiver) = unbounded();
-    for item in items {
-        if tx.send(item).is_err() {
-            break;
-        }
-    }
-    drop(tx);
-
-    let selected_items = Skim::run_with(&options, Some(rx))
-        .filter(|out| !out.is_abort)
-        .map(|out| out.selected_items)
-        .unwrap_or_default();
-
-    let selected = selected_items
-        .first()
-        .map(|item| item.output().to_string())
-        .unwrap_or_default();
-
-    Ok(selected)
+    Ok(selected.unwrap_or_default())
 }
 
-fn preview_readme(items: Vec<Arc<dyn SkimItem>>) -> Vec<AnsiString<'static>> {
-    let Some(item) = items.first() else {
-        return vec!["No item selected".to_string().into()];
-    };
-
-    let repo_path = item.output().to_string();
-    let readme_path = Path::new(&repo_path).join("README.md");
-
-    match fs::read_to_string(&readme_path) {
-        Ok(content) => {
-            let rendered = termimad::term_text(&content);
-            rendered
-                .to_string()
-                .lines()
-                .map(AnsiString::parse)
-                .collect()
-        }
-        Err(_) => vec!["No README.md".to_string().into()],
-    }
-}
