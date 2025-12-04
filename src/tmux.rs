@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
-use crate::runner::run_command;
+use crate::command::{CommandRunner, SystemCommandRunner};
 
 pub struct WindowConfig {
     pub name: String,
@@ -28,17 +28,19 @@ pub struct NoopTmuxClient;
 
 impl TmuxClient for SystemTmuxClient {
     fn new_window(&self, cfg: &WindowConfig) -> Result<()> {
+        let runner = SystemCommandRunner;
         let start_dir = cfg
             .start_dir
             .to_str()
             .context("repository path contains invalid UTF-8")?;
 
-        run_command("tmux", &["new-window", "-n", &cfg.name, "-c", start_dir])?;
+        runner.run("tmux", &["new-window", "-n", &cfg.name, "-c", start_dir])?;
         Ok(())
     }
 
     fn rename_window(&self, name: &str) -> Result<()> {
-        run_command("tmux", &["rename-window", name])?;
+        let runner = SystemCommandRunner;
+        runner.run("tmux", &["rename-window", name])?;
         Ok(())
     }
 }
