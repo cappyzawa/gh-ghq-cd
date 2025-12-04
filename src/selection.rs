@@ -121,4 +121,3 @@ pub fn select_repository(
 
     Ok(selected.unwrap_or_default())
 }
-
