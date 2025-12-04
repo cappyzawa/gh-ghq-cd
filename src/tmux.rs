@@ -1,6 +1,8 @@
-use std::{path::PathBuf, process::Command};
+use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
+
+use crate::runner::run_command;
 
 pub struct WindowConfig {
     pub name: String,
@@ -31,19 +33,12 @@ impl TmuxClient for SystemTmuxClient {
             .to_str()
             .context("repository path contains invalid UTF-8")?;
 
-        let status = Command::new("tmux")
-            .args(["new-window", "-n", &cfg.name, "-c", start_dir])
-            .status()
-            .context("failed to run tmux new-window")?;
-
-        if !status.success() {
-            bail!("tmux new-window failed");
-        }
+        run_command("tmux", &["new-window", "-n", &cfg.name, "-c", start_dir])?;
         Ok(())
     }
 
     fn rename_window(&self, name: &str) -> Result<()> {
-        let _ = Command::new("tmux").args(["rename-window", name]).status();
+        run_command("tmux", &["rename-window", name])?;
         Ok(())
     }
 }

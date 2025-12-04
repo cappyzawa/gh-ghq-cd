@@ -10,11 +10,13 @@ use std::path::Path;
 use std::process::Command;
 use which::which;
 
+use crate::runner::run_command;
 use crate::tmux::NoopTmuxClient;
 use crate::tmux::SystemTmuxClient;
 use crate::tmux::TmuxClient;
 use crate::tmux::WindowConfig;
 
+mod runner;
 mod tmux;
 
 /// Custom SkimItem that displays short path but returns full path
@@ -137,32 +139,15 @@ fn preview_readme(items: Vec<Arc<dyn SkimItem>>) -> Vec<AnsiString<'static>> {
 
 fn select_repository() -> Result<String> {
     // Get ghq root paths (supports multiple roots)
-    let root_output = Command::new("ghq")
-        .args(["root", "--all"])
-        .output()
-        .context("failed to run ghq root")?;
+    let root_output = run_command("ghq", &["root", "--all"])?;
 
-    if !root_output.status.success() {
-        bail!("ghq root failed");
-    }
-
-    let roots: Vec<String> = String::from_utf8_lossy(&root_output.stdout)
-        .lines()
-        .map(|s| s.to_string())
-        .collect();
+    let roots: Vec<String> = root_output.lines().map(|s| s.to_string()).collect();
 
     // Run ghq list --full-path and collect output
-    let ghq_output = Command::new("ghq")
-        .args(["list", "--full-path"])
-        .output()
-        .context("failed to run ghq")?;
-
-    if !ghq_output.status.success() {
-        bail!("ghq list failed");
-    }
+    let ghq_output = run_command("ghq", &["list", "--full-path"])?;
 
     // Build RepoItem list with display paths (path without ghq root prefix)
-    let items: Vec<Arc<dyn SkimItem>> = String::from_utf8_lossy(&ghq_output.stdout)
+    let items: Vec<Arc<dyn SkimItem>> = ghq_output
         .lines()
         .map(|full_path| {
             // Find matching root and strip it from full path
