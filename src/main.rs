@@ -45,14 +45,11 @@ struct Args {
 }
 
 fn main() -> Result<()> {
-    // Check for deprecated -nw flag and warn
-    let raw_args: Vec<String> = env::args().collect();
-    let has_deprecated_nw = raw_args.iter().any(|arg| arg == "-nw");
-
-    let args: Vec<String> = raw_args
-        .into_iter()
+    let mut has_deprecated_nw = false;
+    let args: Vec<String> = env::args()
         .map(|arg| {
             if arg == "-nw" {
+                has_deprecated_nw = true;
                 "--new-window".to_string()
             } else {
                 arg
