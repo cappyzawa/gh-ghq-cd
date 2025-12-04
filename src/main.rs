@@ -84,8 +84,7 @@ fn main() -> Result<()> {
     let selected = select_repository()?;
 
     if selected.is_empty() {
-        // User cancelled selection
-        std::process::exit(1);
+        return Ok(());
     }
 
     let repo_name = Path::new(&selected)
@@ -190,7 +189,9 @@ fn select_repository() -> Result<String> {
     // Create receiver for items
     let (tx, rx): (SkimItemSender, SkimItemReceiver) = unbounded();
     for item in items {
-        let _ = tx.send(item);
+        if tx.send(item).is_err() {
+            break;
+        }
     }
     drop(tx);
 

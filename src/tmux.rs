@@ -26,14 +26,13 @@ pub struct NoopTmuxClient;
 
 impl TmuxClient for SystemTmuxClient {
     fn new_window(&self, cfg: &WindowConfig) -> Result<()> {
+        let start_dir = cfg
+            .start_dir
+            .to_str()
+            .context("repository path contains invalid UTF-8")?;
+
         let status = Command::new("tmux")
-            .args([
-                "new-window",
-                "-n",
-                &cfg.name,
-                "-c",
-                cfg.start_dir.to_str().unwrap(),
-            ])
+            .args(["new-window", "-n", &cfg.name, "-c", start_dir])
             .status()
             .context("failed to run tmux new-window")?;
 
