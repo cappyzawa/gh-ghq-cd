@@ -8,6 +8,14 @@ use std::fs;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
+use which::which;
+
+use crate::tmux::NoopTmuxClient;
+use crate::tmux::SystemTmuxClient;
+use crate::tmux::TmuxClient;
+use crate::tmux::WindowConfig;
+
+mod tmux;
 
 /// Custom SkimItem that displays short path but returns full path
 struct RepoItem {
@@ -63,6 +71,12 @@ fn main() -> Result<()> {
     let use_tmux = env::var("TMUX").is_ok();
     let new_window = args.new_window && use_tmux;
 
+    let tmux: Box<dyn TmuxClient> = if use_tmux {
+        Box::new(SystemTmuxClient)
+    } else {
+        Box::new(NoopTmuxClient)
+    };
+
     // Check required commands
     check_command("ghq")?;
 
@@ -80,14 +94,14 @@ fn main() -> Result<()> {
         .unwrap_or(&selected);
 
     if new_window {
-        // Open in new tmux window
-        tmux_new_window(&selected, repo_name)?;
+        let cfg = WindowConfig::new(repo_name, &selected);
+        tmux.new_window(&cfg)?;
     } else {
         // Change directory and start shell
         env::set_current_dir(&selected).with_context(|| format!("failed to cd to {}", selected))?;
 
         if use_tmux {
-            tmux_rename_window(repo_name)?;
+            tmux.rename_window(repo_name)?
         }
 
         exec_shell()?;
@@ -97,7 +111,7 @@ fn main() -> Result<()> {
 }
 
 fn check_command(cmd: &str) -> Result<()> {
-    which::which(cmd).with_context(|| format!("{} not found on the system", cmd))?;
+    which(cmd).with_context(|| format!("{} not found on the system", cmd))?;
     Ok(())
 }
 
@@ -193,26 +207,6 @@ fn select_repository() -> Result<String> {
         .unwrap_or_default();
 
     Ok(selected)
-}
-
-fn tmux_new_window(dir: &str, repo_name: &str) -> Result<()> {
-    let status = Command::new("tmux")
-        .args(["new-window", "-n", repo_name, "-c", dir])
-        .status()
-        .context("failed to run tmux new-window")?;
-
-    if !status.success() {
-        bail!("tmux new-window failed");
-    }
-    Ok(())
-}
-
-fn tmux_rename_window(repo_name: &str) -> Result<()> {
-    let _ = Command::new("tmux")
-        .args(["rename-window", repo_name])
-        .status();
-    // Ignore errors for rename-window
-    Ok(())
 }
 
 fn exec_shell() -> Result<()> {
