@@ -138,7 +138,7 @@ fn select_repository() -> Result<String> {
     // Get ghq root paths (supports multiple roots)
     let root_output = run_command("ghq", &["root", "--all"])?;
 
-    let roots: Vec<String> = root_output.lines().map(|s| s.to_string()).collect();
+    let roots: Vec<String> = root_output.lines().map(String::from).collect();
 
     // Run ghq list --full-path and collect output
     let ghq_output = run_command("ghq", &["list", "--full-path"])?;
