@@ -18,17 +18,17 @@ impl WindowConfig {
     }
 }
 
-pub trait TmuxClient {
+pub trait Multiplexer {
     fn new_window(&self, cfg: &WindowConfig, pane_count: u8, horizontal: bool) -> Result<()>;
     fn rename_window(&self, name: &str) -> Result<()>;
     fn new_pane(&self, cfg: &WindowConfig, pane_count: u8, horizontal: bool) -> Result<()>;
     fn send_keys(&self, keys: &str) -> Result<()>;
 }
 
-pub struct SystemTmuxClient;
-pub struct NoopTmuxClient;
+pub struct TmuxClient;
+pub struct NoopClient;
 
-impl TmuxClient for SystemTmuxClient {
+impl Multiplexer for TmuxClient {
     fn new_window(&self, cfg: &WindowConfig, pane_count: u8, horizontal: bool) -> Result<()> {
         let runner = SystemCommandRunner;
         let start_dir = cfg
@@ -123,7 +123,7 @@ impl TmuxClient for SystemTmuxClient {
     }
 }
 
-impl TmuxClient for NoopTmuxClient {
+impl Multiplexer for NoopClient {
     fn new_window(&self, _: &WindowConfig, _: u8, _: bool) -> Result<()> {
         Ok(())
     }

@@ -5,9 +5,9 @@ use std::path::Path;
 
 use crate::command::{CommandChecker, CommandRunner, SystemCommandChecker, SystemCommandRunner};
 use crate::environment::{Environment, SystemEnvironment};
+use crate::multiplexer::{Multiplexer, NoopClient, TmuxClient, WindowConfig};
 use crate::selection::select_repository;
 use crate::shell;
-use crate::tmux::{NoopTmuxClient, SystemTmuxClient, TmuxClient, WindowConfig};
 
 /// Mode of operation for tmux
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -136,10 +136,10 @@ pub fn run() -> Result<()> {
 
     // Check if running inside tmux
     let use_tmux = env.var("TMUX").is_some();
-    let tmux: Box<dyn TmuxClient> = if use_tmux {
-        Box::new(SystemTmuxClient)
+    let tmux: Box<dyn Multiplexer> = if use_tmux {
+        Box::new(TmuxClient)
     } else {
-        Box::new(NoopTmuxClient)
+        Box::new(NoopClient)
     };
 
     let mode = args.tmux_mode();
@@ -162,7 +162,7 @@ fn run_with_deps(
     env: &dyn Environment,
     checker: &dyn CommandChecker,
     runner: &dyn CommandRunner,
-    tmux: &dyn TmuxClient,
+    mux: &dyn Multiplexer,
 ) -> Result<()> {
     // Check required commands
     checker.check("ghq")?;
@@ -175,7 +175,7 @@ fn run_with_deps(
         return Ok(());
     }
 
-    handle_selection(&selected, mode, command, use_tmux, env, tmux)
+    handle_selection(&selected, mode, command, use_tmux, env, mux)
 }
 
 fn handle_selection(
@@ -184,7 +184,7 @@ fn handle_selection(
     command: Option<&str>,
     use_tmux: bool,
     env: &dyn Environment,
-    tmux: &dyn TmuxClient,
+    mux: &dyn Multiplexer,
 ) -> Result<()> {
     let repo_name = Path::new(selected)
         .file_name()
@@ -201,16 +201,16 @@ fn handle_selection(
     match effective_mode {
         TmuxMode::NewWindow { count, horizontal } => {
             let cfg = WindowConfig::new(repo_name, selected);
-            tmux.new_window(&cfg, count, horizontal)?;
+            mux.new_window(&cfg, count, horizontal)?;
             if let Some(cmd) = command {
-                tmux.send_keys(cmd)?;
+                mux.send_keys(cmd)?;
             }
         }
         TmuxMode::NewPane { count, horizontal } => {
             let cfg = WindowConfig::new(repo_name, selected);
-            tmux.new_pane(&cfg, count, horizontal)?;
+            mux.new_pane(&cfg, count, horizontal)?;
             if let Some(cmd) = command {
-                tmux.send_keys(cmd)?;
+                mux.send_keys(cmd)?;
             }
         }
         TmuxMode::CurrentPane => {
@@ -218,7 +218,7 @@ fn handle_selection(
             env.set_current_dir(selected)?;
 
             if use_tmux {
-                tmux.rename_window(repo_name)?
+                mux.rename_window(repo_name)?
             }
 
             let shell_path = env.var("SHELL").unwrap_or_else(|| String::from("/bin/sh"));
@@ -277,7 +277,7 @@ mod tests {
         }
     }
 
-    impl TmuxClient for MockTmuxClient {
+    impl Multiplexer for MockTmuxClient {
         fn new_window(&self, cfg: &WindowConfig, count: u8, horizontal: bool) -> Result<()> {
             self.new_window_calls
                 .borrow_mut()
