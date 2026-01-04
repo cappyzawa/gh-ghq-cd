@@ -22,6 +22,7 @@ pub trait TmuxClient {
     fn new_window(&self, cfg: &WindowConfig, pane_count: u8, horizontal: bool) -> Result<()>;
     fn rename_window(&self, name: &str) -> Result<()>;
     fn new_pane(&self, cfg: &WindowConfig, pane_count: u8, horizontal: bool) -> Result<()>;
+    fn send_keys(&self, keys: &str) -> Result<()>;
 }
 
 pub struct SystemTmuxClient;
@@ -114,6 +115,12 @@ impl TmuxClient for SystemTmuxClient {
 
         Ok(())
     }
+
+    fn send_keys(&self, keys: &str) -> Result<()> {
+        let runner = SystemCommandRunner;
+        runner.run("tmux", &["send-keys", keys, "Enter"])?;
+        Ok(())
+    }
 }
 
 impl TmuxClient for NoopTmuxClient {
@@ -124,6 +131,9 @@ impl TmuxClient for NoopTmuxClient {
         Ok(())
     }
     fn new_pane(&self, _: &WindowConfig, _: u8, _: bool) -> Result<()> {
+        Ok(())
+    }
+    fn send_keys(&self, _: &str) -> Result<()> {
         Ok(())
     }
 }

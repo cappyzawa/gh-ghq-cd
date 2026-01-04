@@ -74,6 +74,18 @@ gh cd -w -p -H
 gh cd -w -p 2 -H
 ```
 
+#### Run Command in New Pane/Window
+
+```bash
+# Run a command in the new pane/window
+gh cd -w -c "claude"
+gh cd -p -c "npm run dev"
+gh cd -w -p -c "claude"
+```
+
+> [!NOTE]
+> `-c` cannot be used with `-p 2` (multiple panes)
+
 #### Layout Examples
 
 **`gh cd -p` (vertical split)**
