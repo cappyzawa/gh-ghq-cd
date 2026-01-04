@@ -19,7 +19,7 @@ impl WindowConfig {
 }
 
 pub trait TmuxClient {
-    fn new_window(&self, cfg: &WindowConfig) -> Result<()>;
+    fn new_window(&self, cfg: &WindowConfig, pane_count: u8, horizontal: bool) -> Result<()>;
     fn rename_window(&self, name: &str) -> Result<()>;
     fn new_pane(&self, cfg: &WindowConfig, pane_count: u8, horizontal: bool) -> Result<()>;
 }
@@ -28,7 +28,7 @@ pub struct SystemTmuxClient;
 pub struct NoopTmuxClient;
 
 impl TmuxClient for SystemTmuxClient {
-    fn new_window(&self, cfg: &WindowConfig) -> Result<()> {
+    fn new_window(&self, cfg: &WindowConfig, pane_count: u8, horizontal: bool) -> Result<()> {
         let runner = SystemCommandRunner;
         let start_dir = cfg
             .start_dir
@@ -36,6 +36,33 @@ impl TmuxClient for SystemTmuxClient {
             .context("repository path contains invalid UTF-8")?;
 
         runner.run("tmux", &["new-window", "-n", &cfg.name, "-c", start_dir])?;
+
+        // If pane_count >= 2, split the new window into 2 panes
+        // (the new window itself is the "lane", so we only need to split it)
+        if pane_count >= 2 {
+            // Split direction:
+            // - vertical (default): -v (split top/bottom)
+            // - horizontal: -h (split left/right)
+            let split = if horizontal { "-h" } else { "-v" };
+            runner.run("tmux", &["split-window", split, "-c", start_dir])?;
+
+            // Navigate and set titles for both panes
+            let nav_to_first = if horizontal { "-L" } else { "-U" };
+            let nav_to_second = if horizontal { "-R" } else { "-D" };
+
+            runner.run("tmux", &["select-pane", nav_to_first])?;
+            runner.run("tmux", &["select-pane", "-T", &cfg.name])?;
+
+            runner.run("tmux", &["select-pane", nav_to_second])?;
+            runner.run("tmux", &["select-pane", "-T", &cfg.name])?;
+
+            // Return to first pane (focus)
+            runner.run("tmux", &["select-pane", nav_to_first])?;
+
+            // Equalize pane sizes
+            runner.run("tmux", &["select-layout", "-E"])?;
+        }
+
         Ok(())
     }
 
@@ -90,7 +117,7 @@ impl TmuxClient for SystemTmuxClient {
 }
 
 impl TmuxClient for NoopTmuxClient {
-    fn new_window(&self, _: &WindowConfig) -> Result<()> {
+    fn new_window(&self, _: &WindowConfig, _: u8, _: bool) -> Result<()> {
         Ok(())
     }
     fn rename_window(&self, _: &str) -> Result<()> {
