@@ -35,12 +35,12 @@ gh ghq-cd
 gh cd
 ```
 
-### Tmux Integration
+### Terminal Multiplexer Integration
 
-When running inside tmux, you can use additional options:
+When running inside a terminal multiplexer (tmux or zellij), you can use additional options. The tool automatically detects your environment via `TMUX` or `ZELLIJ` environment variables.
 
 ```bash
-# Open in new tmux window
+# Open in new window (tmux) / tab (zellij)
 gh cd -w
 
 # Open in new pane (vertical split, default)
@@ -49,10 +49,10 @@ gh cd -p
 # Open in new pane with 2 sub-panes (vertical + horizontal split)
 gh cd -p 2
 
-# Open in new window with pane split
+# Open in new window/tab with pane split
 gh cd -w -p
 
-# Open in new window with 2 sub-panes
+# Open in new window/tab with 2 sub-panes
 gh cd -w -p 2
 ```
 
@@ -69,7 +69,7 @@ gh cd -p -H
 gh cd -p 2 -V    # vertical + top/bottom
 gh cd -p 2 -H    # horizontal + left/right
 
-# New window with horizontal split
+# New window/tab with horizontal split
 gh cd -w -p -H
 gh cd -w -p 2 -H
 ```
