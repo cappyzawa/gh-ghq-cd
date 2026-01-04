@@ -33,7 +33,71 @@ gh ghq-cd
 
 # If you set "cd" as an alias for ghq-cd
 gh cd
+```
 
-# If you want to open the selected repository with tmux new window
-gh cd -n
+### Tmux Integration
+
+When running inside tmux, you can use additional options:
+
+```bash
+# Open in new tmux window
+gh cd -w
+
+# Open in new pane (vertical split, default)
+gh cd -p
+
+# Open in new pane with 2 sub-panes (vertical + horizontal split)
+gh cd -p 2
+```
+
+#### Pane Split Direction
+
+```bash
+# Vertical split (default)
+gh cd -p -V
+
+# Horizontal split
+gh cd -p -H
+
+# With 2 sub-panes
+gh cd -p 2 -V    # vertical + top/bottom
+gh cd -p 2 -H    # horizontal + left/right
+```
+
+#### Layout Examples
+
+**`gh cd -p` (vertical split)**
+```
+┌─────────┬─────────┐
+│ existing│   new   │
+│  pane   │  pane   │
+└─────────┴─────────┘
+```
+
+**`gh cd -p 2` (vertical + 2 sub-panes)**
+```
+┌─────────┬─────────┐
+│ existing│   new   │ ← focus here
+├─────────┼─────────┤
+│         │   new   │
+└─────────┴─────────┘
+```
+
+**`gh cd -p -H` (horizontal split)**
+```
+┌───────────────────┐
+│   existing pane   │
+├───────────────────┤
+│     new pane      │
+└───────────────────┘
+```
+
+**`gh cd -p 2 -H` (horizontal + 2 sub-panes)**
+```
+┌───────────────────┐
+│   existing pane   │
+├─────────┬─────────┤
+│   new   │   new   │
+│ ← focus │         │
+└─────────┴─────────┘
 ```
