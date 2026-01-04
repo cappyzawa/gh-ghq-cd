@@ -5,7 +5,7 @@ use std::path::Path;
 
 use crate::command::{CommandChecker, CommandRunner, SystemCommandChecker, SystemCommandRunner};
 use crate::environment::{Environment, SystemEnvironment};
-use crate::multiplexer::{Multiplexer, NoopClient, TmuxClient, WindowConfig};
+use crate::multiplexer::{Multiplexer, NoopClient, TmuxClient, WindowConfig, ZellijClient};
 use crate::selection::select_repository;
 use crate::shell;
 
@@ -134,9 +134,14 @@ pub fn run() -> Result<()> {
     let checker = SystemCommandChecker;
     let runner = SystemCommandRunner;
 
-    // Check if running inside tmux
+    // Check if running inside a terminal multiplexer
     let use_tmux = env.var("TMUX").is_some();
-    let tmux: Box<dyn Multiplexer> = if use_tmux {
+    let use_zellij = env.var("ZELLIJ").is_some();
+    let use_multiplexer = use_tmux || use_zellij;
+
+    let mux: Box<dyn Multiplexer> = if use_zellij {
+        Box::new(ZellijClient)
+    } else if use_tmux {
         Box::new(TmuxClient)
     } else {
         Box::new(NoopClient)
@@ -147,18 +152,18 @@ pub fn run() -> Result<()> {
     run_with_deps(
         mode,
         command,
-        use_tmux,
+        use_multiplexer,
         &env,
         &checker,
         &runner,
-        tmux.as_ref(),
+        mux.as_ref(),
     )
 }
 
 fn run_with_deps(
     mode: TmuxMode,
     command: Option<&str>,
-    use_tmux: bool,
+    use_mux: bool,
     env: &dyn Environment,
     checker: &dyn CommandChecker,
     runner: &dyn CommandRunner,
@@ -175,14 +180,14 @@ fn run_with_deps(
         return Ok(());
     }
 
-    handle_selection(&selected, mode, command, use_tmux, env, mux)
+    handle_selection(&selected, mode, command, use_mux, env, mux)
 }
 
 fn handle_selection(
     selected: &str,
     mode: TmuxMode,
     command: Option<&str>,
-    use_tmux: bool,
+    use_mux: bool,
     env: &dyn Environment,
     mux: &dyn Multiplexer,
 ) -> Result<()> {
@@ -191,12 +196,8 @@ fn handle_selection(
         .and_then(|s| s.to_str())
         .unwrap_or(selected);
 
-    // Apply tmux mode only when inside tmux
-    let effective_mode = if use_tmux {
-        mode
-    } else {
-        TmuxMode::CurrentPane
-    };
+    // Apply mode only when inside a terminal multiplexer
+    let effective_mode = if use_mux { mode } else { TmuxMode::CurrentPane };
 
     match effective_mode {
         TmuxMode::NewWindow { count, horizontal } => {
@@ -217,7 +218,7 @@ fn handle_selection(
             // Change directory and start shell
             env.set_current_dir(selected)?;
 
-            if use_tmux {
+            if use_mux {
                 mux.rename_window(repo_name)?
             }
 

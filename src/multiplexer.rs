@@ -26,6 +26,7 @@ pub trait Multiplexer {
 }
 
 pub struct TmuxClient;
+pub struct ZellijClient;
 pub struct NoopClient;
 
 impl Multiplexer for TmuxClient {
@@ -119,6 +120,119 @@ impl Multiplexer for TmuxClient {
     fn send_keys(&self, keys: &str) -> Result<()> {
         let runner = SystemCommandRunner;
         runner.run("tmux", &["send-keys", keys, "Enter"])?;
+        Ok(())
+    }
+}
+
+impl Multiplexer for ZellijClient {
+    fn new_window(&self, cfg: &WindowConfig, pane_count: u8, horizontal: bool) -> Result<()> {
+        let runner = SystemCommandRunner;
+        let start_dir = cfg
+            .start_dir
+            .to_str()
+            .context("repository path contains invalid UTF-8")?;
+
+        runner.run(
+            "zellij",
+            &["action", "new-tab", "--name", &cfg.name, "--cwd", start_dir],
+        )?;
+
+        // Set pane name for the initial pane
+        runner.run("zellij", &["action", "rename-pane", &cfg.name])?;
+
+        // If pane_count >= 2, split the new tab into 2 panes
+        if pane_count >= 2 {
+            // Split direction:
+            // - vertical (default): down (split top/bottom)
+            // - horizontal: right (split left/right)
+            let direction = if horizontal { "right" } else { "down" };
+            runner.run(
+                "zellij",
+                &[
+                    "action",
+                    "new-pane",
+                    "--direction",
+                    direction,
+                    "--cwd",
+                    start_dir,
+                ],
+            )?;
+
+            // Set pane name for the new pane
+            runner.run("zellij", &["action", "rename-pane", &cfg.name])?;
+
+            // Move focus back to first pane
+            let focus_direction = if horizontal { "left" } else { "up" };
+            runner.run("zellij", &["action", "move-focus", focus_direction])?;
+        }
+
+        Ok(())
+    }
+
+    fn rename_window(&self, name: &str) -> Result<()> {
+        let runner = SystemCommandRunner;
+        runner.run("zellij", &["action", "rename-tab", name])?;
+        Ok(())
+    }
+
+    fn new_pane(&self, cfg: &WindowConfig, pane_count: u8, horizontal: bool) -> Result<()> {
+        let runner = SystemCommandRunner;
+        let start_dir = cfg
+            .start_dir
+            .to_str()
+            .context("repository path contains invalid UTF-8")?;
+
+        // Primary split direction:
+        // - vertical (default): right (split left/right)
+        // - horizontal: down (split top/bottom)
+        let primary_direction = if horizontal { "down" } else { "right" };
+        runner.run(
+            "zellij",
+            &[
+                "action",
+                "new-pane",
+                "--direction",
+                primary_direction,
+                "--cwd",
+                start_dir,
+            ],
+        )?;
+
+        // Set pane name for the new pane
+        runner.run("zellij", &["action", "rename-pane", &cfg.name])?;
+
+        if pane_count >= 2 {
+            // Secondary split (perpendicular to primary):
+            let secondary_direction = if horizontal { "right" } else { "down" };
+            runner.run(
+                "zellij",
+                &[
+                    "action",
+                    "new-pane",
+                    "--direction",
+                    secondary_direction,
+                    "--cwd",
+                    start_dir,
+                ],
+            )?;
+
+            // Set pane name for the second pane
+            runner.run("zellij", &["action", "rename-pane", &cfg.name])?;
+
+            // Move focus back to first sub-pane
+            let focus_direction = if horizontal { "left" } else { "up" };
+            runner.run("zellij", &["action", "move-focus", focus_direction])?;
+        }
+
+        Ok(())
+    }
+
+    fn send_keys(&self, keys: &str) -> Result<()> {
+        let runner = SystemCommandRunner;
+        // Write the command characters
+        runner.run("zellij", &["action", "write-chars", keys])?;
+        // Send Enter key (newline = 10 in ASCII)
+        runner.run("zellij", &["action", "write", "10"])?;
         Ok(())
     }
 }
