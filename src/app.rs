@@ -5,9 +5,9 @@ use std::path::Path;
 
 use crate::command::{CommandChecker, CommandRunner, SystemCommandChecker, SystemCommandRunner};
 use crate::environment::{Environment, SystemEnvironment};
+use crate::multiplexer::{Multiplexer, NoopClient, TmuxClient, WindowConfig, ZellijClient};
 use crate::selection::select_repository;
 use crate::shell;
-use crate::tmux::{NoopTmuxClient, SystemTmuxClient, TmuxClient, WindowConfig};
 
 /// Mode of operation for tmux
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -134,12 +134,17 @@ pub fn run() -> Result<()> {
     let checker = SystemCommandChecker;
     let runner = SystemCommandRunner;
 
-    // Check if running inside tmux
+    // Check if running inside a terminal multiplexer
     let use_tmux = env.var("TMUX").is_some();
-    let tmux: Box<dyn TmuxClient> = if use_tmux {
-        Box::new(SystemTmuxClient)
+    let use_zellij = env.var("ZELLIJ").is_some();
+    let use_multiplexer = use_tmux || use_zellij;
+
+    let mux: Box<dyn Multiplexer> = if use_zellij {
+        Box::new(ZellijClient)
+    } else if use_tmux {
+        Box::new(TmuxClient)
     } else {
-        Box::new(NoopTmuxClient)
+        Box::new(NoopClient)
     };
 
     let mode = args.tmux_mode();
@@ -147,22 +152,22 @@ pub fn run() -> Result<()> {
     run_with_deps(
         mode,
         command,
-        use_tmux,
+        use_multiplexer,
         &env,
         &checker,
         &runner,
-        tmux.as_ref(),
+        mux.as_ref(),
     )
 }
 
 fn run_with_deps(
     mode: TmuxMode,
     command: Option<&str>,
-    use_tmux: bool,
+    use_mux: bool,
     env: &dyn Environment,
     checker: &dyn CommandChecker,
     runner: &dyn CommandRunner,
-    tmux: &dyn TmuxClient,
+    mux: &dyn Multiplexer,
 ) -> Result<()> {
     // Check required commands
     checker.check("ghq")?;
@@ -175,50 +180,46 @@ fn run_with_deps(
         return Ok(());
     }
 
-    handle_selection(&selected, mode, command, use_tmux, env, tmux)
+    handle_selection(&selected, mode, command, use_mux, env, mux)
 }
 
 fn handle_selection(
     selected: &str,
     mode: TmuxMode,
     command: Option<&str>,
-    use_tmux: bool,
+    use_mux: bool,
     env: &dyn Environment,
-    tmux: &dyn TmuxClient,
+    mux: &dyn Multiplexer,
 ) -> Result<()> {
     let repo_name = Path::new(selected)
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or(selected);
 
-    // Apply tmux mode only when inside tmux
-    let effective_mode = if use_tmux {
-        mode
-    } else {
-        TmuxMode::CurrentPane
-    };
+    // Apply mode only when inside a terminal multiplexer
+    let effective_mode = if use_mux { mode } else { TmuxMode::CurrentPane };
 
     match effective_mode {
         TmuxMode::NewWindow { count, horizontal } => {
             let cfg = WindowConfig::new(repo_name, selected);
-            tmux.new_window(&cfg, count, horizontal)?;
+            mux.new_window(&cfg, count, horizontal)?;
             if let Some(cmd) = command {
-                tmux.send_keys(cmd)?;
+                mux.send_keys(cmd)?;
             }
         }
         TmuxMode::NewPane { count, horizontal } => {
             let cfg = WindowConfig::new(repo_name, selected);
-            tmux.new_pane(&cfg, count, horizontal)?;
+            mux.new_pane(&cfg, count, horizontal)?;
             if let Some(cmd) = command {
-                tmux.send_keys(cmd)?;
+                mux.send_keys(cmd)?;
             }
         }
         TmuxMode::CurrentPane => {
             // Change directory and start shell
             env.set_current_dir(selected)?;
 
-            if use_tmux {
-                tmux.rename_window(repo_name)?
+            if use_mux {
+                mux.rename_window(repo_name)?
             }
 
             let shell_path = env.var("SHELL").unwrap_or_else(|| String::from("/bin/sh"));
@@ -277,7 +278,7 @@ mod tests {
         }
     }
 
-    impl TmuxClient for MockTmuxClient {
+    impl Multiplexer for MockTmuxClient {
         fn new_window(&self, cfg: &WindowConfig, count: u8, horizontal: bool) -> Result<()> {
             self.new_window_calls
                 .borrow_mut()
