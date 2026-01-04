@@ -14,8 +14,12 @@ use crate::tmux::{NoopTmuxClient, SystemTmuxClient, TmuxClient, WindowConfig};
 #[command(about = "cd into ghq managed repositories")]
 struct Args {
     /// Open in new tmux window (only works inside tmux)
-    #[arg(short = 'n', long = "new-window")]
+    #[arg(short = 'w', long = "new-window")]
     new_window: bool,
+
+    /// [DEPRECATED] Use -w instead
+    #[arg(short = 'n', hide = true)]
+    deprecated_new_window: bool,
 }
 
 /// Entry point for the application
@@ -34,12 +38,20 @@ pub fn run() -> Result<()> {
 
     if has_deprecated_nw {
         eprintln!(
-            "{}: -nw is deprecated, use -n or --new-window instead",
+            "{}: -nw is deprecated, use -w or --new-window instead",
             "warning".yellow().bold()
         );
     }
 
     let args = Args::parse_from(args);
+
+    // Show deprecation warning for -n
+    if args.deprecated_new_window {
+        eprintln!(
+            "{}: -n is deprecated, use -w or --new-window instead",
+            "warning".yellow().bold()
+        );
+    }
 
     // Setup dependencies
     let env = SystemEnvironment;
@@ -54,11 +66,12 @@ pub fn run() -> Result<()> {
         Box::new(NoopTmuxClient)
     };
 
-    run_with_deps(&args, use_tmux, &env, &checker, &runner, tmux.as_ref())
+    let new_window = args.new_window || args.deprecated_new_window;
+    run_with_deps(new_window, use_tmux, &env, &checker, &runner, tmux.as_ref())
 }
 
 fn run_with_deps(
-    args: &Args,
+    new_window: bool,
     use_tmux: bool,
     env: &dyn Environment,
     checker: &dyn CommandChecker,
@@ -76,7 +89,7 @@ fn run_with_deps(
         return Ok(());
     }
 
-    handle_selection(&selected, args.new_window, use_tmux, env, tmux)
+    handle_selection(&selected, new_window, use_tmux, env, tmux)
 }
 
 fn handle_selection(
