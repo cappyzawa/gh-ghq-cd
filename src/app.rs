@@ -15,8 +15,8 @@ pub enum TmuxMode {
     /// Use current pane (cd + window rename)
     #[default]
     CurrentPane,
-    /// Create new window
-    NewWindow,
+    /// Create new window with optional pane split
+    NewWindow { count: u8, horizontal: bool },
     /// Create new pane with specified pane count and orientation
     NewPane { count: u8, horizontal: bool },
 }
@@ -58,13 +58,28 @@ struct Args {
 
 impl Args {
     fn tmux_mode(&self) -> TmuxMode {
+        let is_new_window = self.new_window || self.deprecated_new_window;
+
         if let Some(count) = self.new_pane {
-            TmuxMode::NewPane {
-                count,
-                horizontal: self.horizontal,
+            if is_new_window {
+                // -w -p: new window with pane split
+                TmuxMode::NewWindow {
+                    count,
+                    horizontal: self.horizontal,
+                }
+            } else {
+                // -p only: pane split in current window
+                TmuxMode::NewPane {
+                    count,
+                    horizontal: self.horizontal,
+                }
             }
-        } else if self.new_window || self.deprecated_new_window {
-            TmuxMode::NewWindow
+        } else if is_new_window {
+            // -w only: new window without pane split
+            TmuxMode::NewWindow {
+                count: 0,
+                horizontal: false,
+            }
         } else {
             TmuxMode::CurrentPane
         }
@@ -161,9 +176,9 @@ fn handle_selection(
     };
 
     match effective_mode {
-        TmuxMode::NewWindow => {
+        TmuxMode::NewWindow { count, horizontal } => {
             let cfg = WindowConfig::new(repo_name, selected);
-            tmux.new_window(&cfg)?;
+            tmux.new_window(&cfg, count, horizontal)?;
         }
         TmuxMode::NewPane { count, horizontal } => {
             let cfg = WindowConfig::new(repo_name, selected);
@@ -216,7 +231,7 @@ mod tests {
     }
 
     struct MockTmuxClient {
-        new_window_calls: RefCell<Vec<String>>,
+        new_window_calls: RefCell<Vec<(String, u8, bool)>>,
         rename_window_calls: RefCell<Vec<String>>,
         new_pane_calls: RefCell<Vec<(String, u8, bool)>>,
     }
@@ -232,8 +247,10 @@ mod tests {
     }
 
     impl TmuxClient for MockTmuxClient {
-        fn new_window(&self, cfg: &WindowConfig) -> Result<()> {
-            self.new_window_calls.borrow_mut().push(cfg.name.clone());
+        fn new_window(&self, cfg: &WindowConfig, count: u8, horizontal: bool) -> Result<()> {
+            self.new_window_calls
+                .borrow_mut()
+                .push((cfg.name.clone(), count, horizontal));
             Ok(())
         }
 
@@ -257,7 +274,10 @@ mod tests {
 
         let result = handle_selection(
             "/home/user/ghq/github.com/owner/repo",
-            TmuxMode::NewWindow,
+            TmuxMode::NewWindow {
+                count: 0,
+                horizontal: false,
+            },
             true,
             &env,
             &tmux,
@@ -265,7 +285,36 @@ mod tests {
 
         assert!(result.is_ok());
         assert_eq!(tmux.new_window_calls.borrow().len(), 1);
-        assert_eq!(tmux.new_window_calls.borrow()[0], "repo");
+        assert_eq!(
+            tmux.new_window_calls.borrow()[0],
+            ("repo".to_string(), 0, false)
+        );
+        assert!(env.set_dir_calls.borrow().is_empty());
+        assert!(tmux.new_pane_calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn test_handle_selection_new_window_with_panes_in_tmux() {
+        let env = MockEnvironment::new();
+        let tmux = MockTmuxClient::new();
+
+        let result = handle_selection(
+            "/home/user/ghq/github.com/owner/repo",
+            TmuxMode::NewWindow {
+                count: 2,
+                horizontal: true,
+            },
+            true,
+            &env,
+            &tmux,
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(tmux.new_window_calls.borrow().len(), 1);
+        assert_eq!(
+            tmux.new_window_calls.borrow()[0],
+            ("repo".to_string(), 2, true)
+        );
         assert!(env.set_dir_calls.borrow().is_empty());
         assert!(tmux.new_pane_calls.borrow().is_empty());
     }
@@ -338,7 +387,45 @@ mod tests {
             vertical: false,
             horizontal: false,
         };
-        assert_eq!(args.tmux_mode(), TmuxMode::NewWindow);
+        assert_eq!(
+            args.tmux_mode(),
+            TmuxMode::NewWindow {
+                count: 0,
+                horizontal: false
+            }
+        );
+
+        // -w -p
+        let args = Args {
+            new_window: true,
+            deprecated_new_window: false,
+            new_pane: Some(1),
+            vertical: false,
+            horizontal: false,
+        };
+        assert_eq!(
+            args.tmux_mode(),
+            TmuxMode::NewWindow {
+                count: 1,
+                horizontal: false
+            }
+        );
+
+        // -w -p 2 -H
+        let args = Args {
+            new_window: true,
+            deprecated_new_window: false,
+            new_pane: Some(2),
+            vertical: false,
+            horizontal: true,
+        };
+        assert_eq!(
+            args.tmux_mode(),
+            TmuxMode::NewWindow {
+                count: 2,
+                horizontal: true
+            }
+        );
 
         // no flags
         let args = Args {
