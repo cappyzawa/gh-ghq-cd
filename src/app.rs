@@ -54,6 +54,10 @@ struct Args {
         conflicts_with = "vertical"
     )]
     horizontal: bool,
+
+    /// Command to run in the new pane/window
+    #[arg(short = 'c', long = "command")]
+    command: Option<String>,
 }
 
 impl Args {
@@ -117,6 +121,14 @@ pub fn run() -> Result<()> {
         );
     }
 
+    // Validate: -c cannot be used with multiple panes (-p 2)
+    if let Some(count) = args.new_pane
+        && count >= 2
+        && args.command.is_some()
+    {
+        anyhow::bail!("-c/--command cannot be used with multiple panes (-p 2)");
+    }
+
     // Setup dependencies
     let env = SystemEnvironment;
     let checker = SystemCommandChecker;
@@ -131,11 +143,21 @@ pub fn run() -> Result<()> {
     };
 
     let mode = args.tmux_mode();
-    run_with_deps(mode, use_tmux, &env, &checker, &runner, tmux.as_ref())
+    let command = args.command.as_deref();
+    run_with_deps(
+        mode,
+        command,
+        use_tmux,
+        &env,
+        &checker,
+        &runner,
+        tmux.as_ref(),
+    )
 }
 
 fn run_with_deps(
     mode: TmuxMode,
+    command: Option<&str>,
     use_tmux: bool,
     env: &dyn Environment,
     checker: &dyn CommandChecker,
@@ -153,12 +175,13 @@ fn run_with_deps(
         return Ok(());
     }
 
-    handle_selection(&selected, mode, use_tmux, env, tmux)
+    handle_selection(&selected, mode, command, use_tmux, env, tmux)
 }
 
 fn handle_selection(
     selected: &str,
     mode: TmuxMode,
+    command: Option<&str>,
     use_tmux: bool,
     env: &dyn Environment,
     tmux: &dyn TmuxClient,
@@ -179,10 +202,16 @@ fn handle_selection(
         TmuxMode::NewWindow { count, horizontal } => {
             let cfg = WindowConfig::new(repo_name, selected);
             tmux.new_window(&cfg, count, horizontal)?;
+            if let Some(cmd) = command {
+                tmux.send_keys(cmd)?;
+            }
         }
         TmuxMode::NewPane { count, horizontal } => {
             let cfg = WindowConfig::new(repo_name, selected);
             tmux.new_pane(&cfg, count, horizontal)?;
+            if let Some(cmd) = command {
+                tmux.send_keys(cmd)?;
+            }
         }
         TmuxMode::CurrentPane => {
             // Change directory and start shell
@@ -234,6 +263,7 @@ mod tests {
         new_window_calls: RefCell<Vec<(String, u8, bool)>>,
         rename_window_calls: RefCell<Vec<String>>,
         new_pane_calls: RefCell<Vec<(String, u8, bool)>>,
+        send_keys_calls: RefCell<Vec<String>>,
     }
 
     impl MockTmuxClient {
@@ -242,6 +272,7 @@ mod tests {
                 new_window_calls: RefCell::new(Vec::new()),
                 rename_window_calls: RefCell::new(Vec::new()),
                 new_pane_calls: RefCell::new(Vec::new()),
+                send_keys_calls: RefCell::new(Vec::new()),
             }
         }
     }
@@ -265,6 +296,11 @@ mod tests {
                 .push((cfg.name.clone(), count, horizontal));
             Ok(())
         }
+
+        fn send_keys(&self, keys: &str) -> Result<()> {
+            self.send_keys_calls.borrow_mut().push(keys.to_string());
+            Ok(())
+        }
     }
 
     #[test]
@@ -278,6 +314,7 @@ mod tests {
                 count: 0,
                 horizontal: false,
             },
+            None,
             true,
             &env,
             &tmux,
@@ -291,6 +328,7 @@ mod tests {
         );
         assert!(env.set_dir_calls.borrow().is_empty());
         assert!(tmux.new_pane_calls.borrow().is_empty());
+        assert!(tmux.send_keys_calls.borrow().is_empty());
     }
 
     #[test]
@@ -304,6 +342,7 @@ mod tests {
                 count: 2,
                 horizontal: true,
             },
+            None,
             true,
             &env,
             &tmux,
@@ -317,6 +356,7 @@ mod tests {
         );
         assert!(env.set_dir_calls.borrow().is_empty());
         assert!(tmux.new_pane_calls.borrow().is_empty());
+        assert!(tmux.send_keys_calls.borrow().is_empty());
     }
 
     #[test]
@@ -330,6 +370,7 @@ mod tests {
                 count: 2,
                 horizontal: false,
             },
+            None,
             true,
             &env,
             &tmux,
@@ -343,6 +384,30 @@ mod tests {
         );
         assert!(env.set_dir_calls.borrow().is_empty());
         assert!(tmux.new_window_calls.borrow().is_empty());
+        assert!(tmux.send_keys_calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn test_handle_selection_with_command() {
+        let env = MockEnvironment::new();
+        let tmux = MockTmuxClient::new();
+
+        let result = handle_selection(
+            "/home/user/ghq/github.com/owner/repo",
+            TmuxMode::NewWindow {
+                count: 0,
+                horizontal: false,
+            },
+            Some("claude"),
+            true,
+            &env,
+            &tmux,
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(tmux.new_window_calls.borrow().len(), 1);
+        assert_eq!(tmux.send_keys_calls.borrow().len(), 1);
+        assert_eq!(tmux.send_keys_calls.borrow()[0], "claude");
     }
 
     #[test]
@@ -354,6 +419,7 @@ mod tests {
             new_pane: Some(2),
             vertical: false,
             horizontal: false,
+            command: None,
         };
         assert_eq!(
             args.tmux_mode(),
@@ -370,6 +436,7 @@ mod tests {
             new_pane: Some(1),
             vertical: false,
             horizontal: true,
+            command: None,
         };
         assert_eq!(
             args.tmux_mode(),
@@ -386,6 +453,7 @@ mod tests {
             new_pane: None,
             vertical: false,
             horizontal: false,
+            command: None,
         };
         assert_eq!(
             args.tmux_mode(),
@@ -402,6 +470,7 @@ mod tests {
             new_pane: Some(1),
             vertical: false,
             horizontal: false,
+            command: None,
         };
         assert_eq!(
             args.tmux_mode(),
@@ -418,6 +487,7 @@ mod tests {
             new_pane: Some(2),
             vertical: false,
             horizontal: true,
+            command: None,
         };
         assert_eq!(
             args.tmux_mode(),
@@ -434,6 +504,7 @@ mod tests {
             new_pane: None,
             vertical: false,
             horizontal: false,
+            command: None,
         };
         assert_eq!(args.tmux_mode(), TmuxMode::CurrentPane);
     }
