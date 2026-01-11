@@ -44,3 +44,16 @@ jobs:
     - uses: dtolnay/rust-toolchain@stable
     - uses: Swatinem/rust-cache@v2
     - run: cargo test
+
+  nix:
+    name: Nix Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v4
+    - uses: DeterminateSystems/nix-installer-action@v17
+    - uses: DeterminateSystems/magic-nix-cache-action@v9
+    - name: Check flake
+      run: nix flake check --print-build-logs
+    - name: Build x86_64-linux-musl
+      run: nix build .#x86_64-linux-musl --print-build-logs
