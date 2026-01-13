@@ -20,6 +20,28 @@ gh extension install https://github.com/cappyzawa/gh-ghq-cd
 gh extension upgrade gh-ghq-cd
 ```
 
+### Nix (with home-manager)
+
+Add to your `flake.nix` inputs:
+
+```nix
+inputs.gh-ghq-cd = {
+  url = "github:cappyzawa/gh-ghq-cd";
+  inputs.nixpkgs.follows = "nixpkgs";
+};
+```
+
+Then use with `programs.gh.extensions`:
+
+```nix
+programs.gh = {
+  enable = true;
+  extensions = [
+    inputs.gh-ghq-cd.packages.${system}.gh-ghq-cd
+  ];
+};
+```
+
 ### (Optional) Recommended Setting
 
 ```bash
