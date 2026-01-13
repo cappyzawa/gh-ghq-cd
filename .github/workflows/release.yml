@@ -5,6 +5,12 @@ on:
     tags:
     - 'v*'
 
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUST_BACKTRACE: short
+  RUSTUP_MAX_RETRIES: 10
+
 permissions:
   contents: write
 
@@ -15,46 +21,53 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        - os: ubuntu-latest
-          package: x86_64-linux-musl
-          asset_name: gh-ghq-cd-linux-amd64
+        - target: x86_64-unknown-linux-musl
+          os: ubuntu-latest
+          os_label: linux
+          arch_label: amd64
 
-        - os: ubuntu-latest
-          package: aarch64-linux-musl
-          asset_name: gh-ghq-cd-linux-arm64
+        - target: aarch64-unknown-linux-musl
+          os: ubuntu-latest
+          os_label: linux
+          arch_label: arm64
 
-        - os: macos-13
-          package: default
-          asset_name: gh-ghq-cd-darwin-amd64
-
-        - os: macos-latest
-          package: default
-          asset_name: gh-ghq-cd-darwin-arm64
+        - target: aarch64-apple-darwin
+          os: macos-latest
+          os_label: darwin
+          arch_label: arm64
 
     runs-on: ${{ matrix.os }}
+    env:
+      ASSET_NAME: gh-ghq-cd-${{ matrix.os_label }}-${{ matrix.arch_label }}
     steps:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Install Nix
-      uses: DeterminateSystems/nix-installer-action@v17
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ matrix.target }}
 
-    - name: Setup Nix cache
-      uses: DeterminateSystems/magic-nix-cache-action@v9
+    - name: Install cross [Linux]
+      if: matrix.os == 'ubuntu-latest'
+      uses: taiki-e/install-action@cross
 
-    - name: Build package
-      run: |
-        nix build .#${{ matrix.package }} --print-build-logs
+    - name: Build [Cargo]
+      if: matrix.os != 'ubuntu-latest'
+      run: cargo build --release --locked --target ${{ matrix.target }}
+
+    - name: Build [Cross]
+      if: matrix.os == 'ubuntu-latest'
+      run: cross build --release --locked --target ${{ matrix.target }}
 
     - name: Prepare binary
-      run: |
-        cp result/bin/gh-ghq-cd ${{ matrix.asset_name }}
+      run: cp target/${{ matrix.target }}/release/gh-ghq-cd ${{ env.ASSET_NAME }}
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ matrix.asset_name }}
-        path: ${{ matrix.asset_name }}
+        name: ${{ env.ASSET_NAME }}
+        path: ${{ env.ASSET_NAME }}
 
   release:
     name: Create Release

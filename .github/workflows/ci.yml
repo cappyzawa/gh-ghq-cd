@@ -12,24 +12,6 @@ env:
   RUSTFLAGS: -Dwarnings
 
 jobs:
-  version-check:
-    name: Version Consistency Check
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-    - uses: actions/checkout@v4
-    - name: Check version consistency between Cargo.toml and flake.nix
-      run: |
-        CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-        FLAKE_VERSION=$(grep 'version = ' flake.nix | head -1 | sed 's/.*"\(.*\)";/\1/')
-        echo "Cargo.toml version: $CARGO_VERSION"
-        echo "flake.nix version: $FLAKE_VERSION"
-        if [ "$CARGO_VERSION" != "$FLAKE_VERSION" ]; then
-          echo "::error::Version mismatch: Cargo.toml ($CARGO_VERSION) != flake.nix ($FLAKE_VERSION)"
-          echo "Please update flake.nix version and cargoHash"
-          exit 1
-        fi
-
   fmt:
     name: Rustfmt
     runs-on: ubuntu-latest
