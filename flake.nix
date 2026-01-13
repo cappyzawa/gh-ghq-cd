@@ -17,9 +17,9 @@
         let
           basePackage = {
             pname = "gh-ghq-cd";
-            version = "0.8.0";
+            version = "0.9.1";
             src = ./.;
-            cargoHash = "sha256-sMsq6otcvTgWj6w+jJ738NG9j038/XnPcNg7aBxzIzo=";
+            cargoHash = "sha256-CLJ+Yz5lSedSHGNITgq19D13IXILm7N+DuF9CvDXcvs=";
             meta = {
               description = "GitHub CLI extension to fuzzy find and cd to a ghq managed repository";
               homepage = "https://github.com/cappyzawa/gh-ghq-cd";
