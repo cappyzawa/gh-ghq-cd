@@ -19,6 +19,7 @@
       {
         packages = {
           gh-ghq-cd = naersk'.buildPackage {
+            pname = "gh-ghq-cd";
             src = ./.;
             meta = {
               description = "GitHub CLI extension to fuzzy find and cd to a ghq managed repository";
