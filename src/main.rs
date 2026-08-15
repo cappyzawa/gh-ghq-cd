@@ -1,3 +1,7 @@
+mod app;
+mod command;
+mod environment;
+
 fn main() -> anyhow::Result<()> {
-    gh_ghq_cd::run()
+    app::run()
 }

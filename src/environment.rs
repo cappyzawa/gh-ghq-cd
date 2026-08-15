@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 
-pub trait Environment {
+pub(crate) trait Environment {
     fn var(&self, key: &str) -> Option<String>;
     fn set_current_dir(&self, path: &str) -> Result<()>;
 }
 
-pub struct SystemEnvironment;
+pub(crate) struct SystemEnvironment;
 
 impl Environment for SystemEnvironment {
     fn var(&self, key: &str) -> Option<String> {

@@ -5,15 +5,16 @@ use std::path::Path;
 
 use crate::command::{CommandChecker, CommandRunner, SystemCommandChecker, SystemCommandRunner};
 use crate::environment::{Environment, SystemEnvironment};
-use crate::multiplexer::{
-    HerdrClient, Multiplexer, NoopClient, TmuxClient, WindowConfig, ZellijClient,
-};
-use crate::selection::select_repository;
-use crate::shell;
+use multiplexer::{HerdrClient, Multiplexer, NoopClient, TmuxClient, WindowConfig, ZellijClient};
+use selection::select_repository;
+
+mod multiplexer;
+mod selection;
+mod shell;
 
 /// Mode of operation for tmux
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TmuxMode {
+enum TmuxMode {
     /// Use current pane (cd + window rename)
     #[default]
     CurrentPane,
@@ -114,7 +115,7 @@ fn detect_multiplexer(env: &dyn Environment) -> MultiplexerKind {
 }
 
 /// Entry point for the application
-pub fn run() -> Result<()> {
+pub(super) fn run() -> Result<()> {
     let mut has_deprecated_nw = false;
     let args: Vec<String> = std::env::args()
         .map(|arg| {

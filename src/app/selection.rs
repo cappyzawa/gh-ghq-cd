@@ -3,11 +3,12 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 use crate::command::{CommandChecker, CommandRunner};
-use crate::ghq;
+
+mod ghq;
 
 /// Available preview viewers for README display
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PreviewViewer {
+enum PreviewViewer {
     Bat,
     Cat,
 }
@@ -15,7 +16,7 @@ pub enum PreviewViewer {
 impl PreviewViewer {
     /// Detect the best available viewer
     /// Priority: bat > cat
-    pub fn detect(checker: &dyn CommandChecker) -> Self {
+    fn detect(checker: &dyn CommandChecker) -> Self {
         if checker.check("bat").is_ok() {
             Self::Bat
         } else {
@@ -25,7 +26,7 @@ impl PreviewViewer {
 
     /// Generate the preview command for fzf
     /// The `{}` placeholder will be replaced with the path
-    pub fn command(&self) -> &'static str {
+    fn command(&self) -> &'static str {
         match self {
             Self::Bat => {
                 "bat --style=plain --color=always {}/README.md 2>/dev/null || echo 'No README.md'"
@@ -93,7 +94,7 @@ fn run_fzf(items: &[SelectableItem], preview_cmd: &str) -> Result<Option<String>
 }
 
 /// Select a repository interactively using fzf
-pub fn select_repository(
+pub(super) fn select_repository(
     runner: &dyn CommandRunner,
     checker: &dyn CommandChecker,
 ) -> Result<String> {
