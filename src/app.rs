@@ -5,23 +5,29 @@ use std::path::Path;
 
 use crate::command::{CommandChecker, CommandRunner, SystemCommandChecker, SystemCommandRunner};
 use crate::environment::{Environment, SystemEnvironment};
-use multiplexer::{HerdrClient, Multiplexer, NoopClient, TmuxClient, WindowConfig, ZellijClient};
+use multiplexer::{
+    HerdrClient, Multiplexer, NoopClient, Orientation, PaneCount, TmuxClient, WindowConfig,
+    ZellijClient,
+};
 use selection::select_repository;
 
 mod multiplexer;
 mod selection;
 mod shell;
 
-/// Mode of operation for tmux
+/// What the tool should do with the repository it selected
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum TmuxMode {
+enum MultiplexerMode {
     /// Use current pane (cd + window rename)
     #[default]
     CurrentPane,
-    /// Create new window with optional pane split
-    NewWindow { count: u8, horizontal: bool },
-    /// Create new pane with specified pane count and orientation
-    NewPane { count: u8, horizontal: bool },
+    /// Create a new window, split in two when an orientation is given
+    NewWindow { split: Option<Orientation> },
+    /// Create a new pane, split perpendicularly again when two are asked for
+    NewPane {
+        panes: PaneCount,
+        orientation: Orientation,
+    },
 }
 
 #[derive(Parser)]
@@ -64,31 +70,31 @@ struct Args {
 }
 
 impl Args {
-    fn tmux_mode(&self) -> TmuxMode {
+    fn orientation(&self) -> Orientation {
+        if self.horizontal {
+            Orientation::Horizontal
+        } else {
+            Orientation::Vertical
+        }
+    }
+
+    fn mode(&self) -> MultiplexerMode {
         let is_new_window = self.new_window || self.deprecated_new_window;
 
-        if let Some(count) = self.new_pane {
-            if is_new_window {
-                // -w -p: new window with pane split
-                TmuxMode::NewWindow {
-                    count,
-                    horizontal: self.horizontal,
-                }
-            } else {
-                // -p only: pane split in current window
-                TmuxMode::NewPane {
-                    count,
-                    horizontal: self.horizontal,
-                }
-            }
-        } else if is_new_window {
-            // -w only: new window without pane split
-            TmuxMode::NewWindow {
-                count: 0,
-                horizontal: false,
-            }
-        } else {
-            TmuxMode::CurrentPane
+        match (self.new_pane, is_new_window) {
+            // A new window holds one pane already, so only -p 2 splits it
+            (count, true) => MultiplexerMode::NewWindow {
+                split: (count == Some(2)).then(|| self.orientation()),
+            },
+            (Some(2), false) => MultiplexerMode::NewPane {
+                panes: PaneCount::Two,
+                orientation: self.orientation(),
+            },
+            (Some(_), false) => MultiplexerMode::NewPane {
+                panes: PaneCount::One,
+                orientation: self.orientation(),
+            },
+            (None, false) => MultiplexerMode::CurrentPane,
         }
     }
 }
@@ -168,7 +174,7 @@ pub(super) fn run() -> Result<()> {
         MultiplexerKind::None => Box::new(NoopClient),
     };
 
-    let mode = args.tmux_mode();
+    let mode = args.mode();
     let command = args.command.as_deref();
     run_with_deps(
         mode,
@@ -182,7 +188,7 @@ pub(super) fn run() -> Result<()> {
 }
 
 fn run_with_deps(
-    mode: TmuxMode,
+    mode: MultiplexerMode,
     command: Option<&str>,
     use_mux: bool,
     env: &dyn Environment,
@@ -206,7 +212,7 @@ fn run_with_deps(
 
 fn handle_selection(
     selected: &str,
-    mode: TmuxMode,
+    mode: MultiplexerMode,
     command: Option<&str>,
     use_mux: bool,
     env: &dyn Environment,
@@ -218,24 +224,28 @@ fn handle_selection(
         .unwrap_or(selected);
 
     // Apply mode only when inside a terminal multiplexer
-    let effective_mode = if use_mux { mode } else { TmuxMode::CurrentPane };
+    let effective_mode = if use_mux {
+        mode
+    } else {
+        MultiplexerMode::CurrentPane
+    };
 
     match effective_mode {
-        TmuxMode::NewWindow { count, horizontal } => {
+        MultiplexerMode::NewWindow { split } => {
             let cfg = WindowConfig::new(repo_name, selected);
-            mux.new_window(&cfg, count, horizontal)?;
+            mux.new_window(&cfg, split)?;
             if let Some(cmd) = command {
                 mux.send_keys(cmd)?;
             }
         }
-        TmuxMode::NewPane { count, horizontal } => {
+        MultiplexerMode::NewPane { panes, orientation } => {
             let cfg = WindowConfig::new(repo_name, selected);
-            mux.new_pane(&cfg, count, horizontal)?;
+            mux.new_pane(&cfg, panes, orientation)?;
             if let Some(cmd) = command {
                 mux.send_keys(cmd)?;
             }
         }
-        TmuxMode::CurrentPane => {
+        MultiplexerMode::CurrentPane => {
             // Change directory and start shell
             env.set_current_dir(selected)?;
 
@@ -282,9 +292,9 @@ mod tests {
     }
 
     struct MockTmuxClient {
-        new_window_calls: RefCell<Vec<(String, u8, bool)>>,
+        new_window_calls: RefCell<Vec<(String, Option<Orientation>)>>,
         rename_window_calls: RefCell<Vec<String>>,
-        new_pane_calls: RefCell<Vec<(String, u8, bool)>>,
+        new_pane_calls: RefCell<Vec<(String, PaneCount, Orientation)>>,
         send_keys_calls: RefCell<Vec<String>>,
     }
 
@@ -300,10 +310,10 @@ mod tests {
     }
 
     impl Multiplexer for MockTmuxClient {
-        fn new_window(&self, cfg: &WindowConfig, count: u8, horizontal: bool) -> Result<()> {
+        fn new_window(&self, cfg: &WindowConfig, split: Option<Orientation>) -> Result<()> {
             self.new_window_calls
                 .borrow_mut()
-                .push((cfg.name.clone(), count, horizontal));
+                .push((cfg.name.clone(), split));
             Ok(())
         }
 
@@ -312,10 +322,15 @@ mod tests {
             Ok(())
         }
 
-        fn new_pane(&self, cfg: &WindowConfig, count: u8, horizontal: bool) -> Result<()> {
+        fn new_pane(
+            &self,
+            cfg: &WindowConfig,
+            panes: PaneCount,
+            orientation: Orientation,
+        ) -> Result<()> {
             self.new_pane_calls
                 .borrow_mut()
-                .push((cfg.name.clone(), count, horizontal));
+                .push((cfg.name.clone(), panes, orientation));
             Ok(())
         }
 
@@ -332,10 +347,7 @@ mod tests {
 
         let result = handle_selection(
             "/home/user/ghq/github.com/owner/repo",
-            TmuxMode::NewWindow {
-                count: 0,
-                horizontal: false,
-            },
+            MultiplexerMode::NewWindow { split: None },
             None,
             true,
             &env,
@@ -346,7 +358,7 @@ mod tests {
         assert_eq!(tmux.new_window_calls.borrow().len(), 1);
         assert_eq!(
             tmux.new_window_calls.borrow()[0],
-            ("repo".to_string(), 0, false)
+            ("repo".to_string(), None)
         );
         assert!(env.set_dir_calls.borrow().is_empty());
         assert!(tmux.new_pane_calls.borrow().is_empty());
@@ -360,9 +372,8 @@ mod tests {
 
         let result = handle_selection(
             "/home/user/ghq/github.com/owner/repo",
-            TmuxMode::NewWindow {
-                count: 2,
-                horizontal: true,
+            MultiplexerMode::NewWindow {
+                split: Some(Orientation::Horizontal),
             },
             None,
             true,
@@ -374,7 +385,7 @@ mod tests {
         assert_eq!(tmux.new_window_calls.borrow().len(), 1);
         assert_eq!(
             tmux.new_window_calls.borrow()[0],
-            ("repo".to_string(), 2, true)
+            ("repo".to_string(), Some(Orientation::Horizontal))
         );
         assert!(env.set_dir_calls.borrow().is_empty());
         assert!(tmux.new_pane_calls.borrow().is_empty());
@@ -388,9 +399,9 @@ mod tests {
 
         let result = handle_selection(
             "/home/user/ghq/github.com/owner/repo",
-            TmuxMode::NewPane {
-                count: 2,
-                horizontal: false,
+            MultiplexerMode::NewPane {
+                panes: PaneCount::Two,
+                orientation: Orientation::Vertical,
             },
             None,
             true,
@@ -402,7 +413,7 @@ mod tests {
         assert_eq!(tmux.new_pane_calls.borrow().len(), 1);
         assert_eq!(
             tmux.new_pane_calls.borrow()[0],
-            ("repo".to_string(), 2, false)
+            ("repo".to_string(), PaneCount::Two, Orientation::Vertical)
         );
         assert!(env.set_dir_calls.borrow().is_empty());
         assert!(tmux.new_window_calls.borrow().is_empty());
@@ -416,10 +427,7 @@ mod tests {
 
         let result = handle_selection(
             "/home/user/ghq/github.com/owner/repo",
-            TmuxMode::NewWindow {
-                count: 0,
-                horizontal: false,
-            },
+            MultiplexerMode::NewWindow { split: None },
             Some("claude"),
             true,
             &env,
@@ -460,8 +468,24 @@ mod tests {
         assert_eq!(detect_multiplexer(&env), MultiplexerKind::None);
     }
 
+    /// A new window opens with one pane already, so `-w -p` asks for nothing
+    /// beyond `-w`; only `-p 2` splits it.
     #[test]
-    fn test_args_tmux_mode() {
+    fn test_new_window_with_a_single_pane_request_does_not_split() {
+        let args = Args {
+            new_window: true,
+            deprecated_new_window: false,
+            new_pane: Some(1),
+            vertical: false,
+            horizontal: true,
+            command: None,
+        };
+
+        assert_eq!(args.mode(), MultiplexerMode::NewWindow { split: None });
+    }
+
+    #[test]
+    fn test_args_mode() {
         // -p 2
         let args = Args {
             new_window: false,
@@ -472,10 +496,10 @@ mod tests {
             command: None,
         };
         assert_eq!(
-            args.tmux_mode(),
-            TmuxMode::NewPane {
-                count: 2,
-                horizontal: false
+            args.mode(),
+            MultiplexerMode::NewPane {
+                panes: PaneCount::Two,
+                orientation: Orientation::Vertical,
             }
         );
 
@@ -489,10 +513,10 @@ mod tests {
             command: None,
         };
         assert_eq!(
-            args.tmux_mode(),
-            TmuxMode::NewPane {
-                count: 1,
-                horizontal: true
+            args.mode(),
+            MultiplexerMode::NewPane {
+                panes: PaneCount::One,
+                orientation: Orientation::Horizontal,
             }
         );
 
@@ -505,30 +529,7 @@ mod tests {
             horizontal: false,
             command: None,
         };
-        assert_eq!(
-            args.tmux_mode(),
-            TmuxMode::NewWindow {
-                count: 0,
-                horizontal: false
-            }
-        );
-
-        // -w -p
-        let args = Args {
-            new_window: true,
-            deprecated_new_window: false,
-            new_pane: Some(1),
-            vertical: false,
-            horizontal: false,
-            command: None,
-        };
-        assert_eq!(
-            args.tmux_mode(),
-            TmuxMode::NewWindow {
-                count: 1,
-                horizontal: false
-            }
-        );
+        assert_eq!(args.mode(), MultiplexerMode::NewWindow { split: None });
 
         // -w -p 2 -H
         let args = Args {
@@ -540,10 +541,9 @@ mod tests {
             command: None,
         };
         assert_eq!(
-            args.tmux_mode(),
-            TmuxMode::NewWindow {
-                count: 2,
-                horizontal: true
+            args.mode(),
+            MultiplexerMode::NewWindow {
+                split: Some(Orientation::Horizontal)
             }
         );
 
@@ -556,6 +556,6 @@ mod tests {
             horizontal: false,
             command: None,
         };
-        assert_eq!(args.tmux_mode(), TmuxMode::CurrentPane);
+        assert_eq!(args.mode(), MultiplexerMode::CurrentPane);
     }
 }

@@ -71,12 +71,13 @@ gh cd -p
 # Open in new pane with 2 sub-panes (vertical + horizontal split)
 gh cd -p 2
 
-# Open in new window/tab/workspace with pane split
-gh cd -w -p
-
-# Open in new window/tab/workspace with 2 sub-panes
+# Open in new window/tab/workspace split into 2 panes
 gh cd -w -p 2
 ```
+
+> [!NOTE]
+> A new window/tab/workspace already opens with one pane, so `-w -p` does the
+> same as `-w`. Use `-w -p 2` to split it.
 
 #### Pane Split Direction
 
@@ -91,8 +92,7 @@ gh cd -p -H
 gh cd -p 2 -V    # vertical + top/bottom
 gh cd -p 2 -H    # horizontal + left/right
 
-# New window/tab/workspace with horizontal split
-gh cd -w -p -H
+# New window/tab/workspace split left/right
 gh cd -w -p 2 -H
 ```
 
@@ -102,7 +102,6 @@ gh cd -w -p 2 -H
 # Run a command in the new pane/window
 gh cd -w -c "claude"
 gh cd -p -c "npm run dev"
-gh cd -w -p -c "claude"
 ```
 
 > [!NOTE]
