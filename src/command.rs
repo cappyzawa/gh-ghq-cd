@@ -2,15 +2,15 @@ use anyhow::{Context, Result, bail};
 use std::process::Command;
 use which::which;
 
-pub trait CommandChecker {
+pub(crate) trait CommandChecker {
     fn check(&self, cmd: &str) -> Result<()>;
 }
 
-pub trait CommandRunner {
+pub(crate) trait CommandRunner {
     fn run(&self, cmd: &str, args: &[&str]) -> Result<String>;
 }
 
-pub struct SystemCommandChecker;
+pub(crate) struct SystemCommandChecker;
 
 impl CommandChecker for SystemCommandChecker {
     fn check(&self, cmd: &str) -> Result<()> {
@@ -19,7 +19,7 @@ impl CommandChecker for SystemCommandChecker {
     }
 }
 
-pub struct SystemCommandRunner;
+pub(crate) struct SystemCommandRunner;
 
 impl CommandRunner for SystemCommandRunner {
     fn run(&self, cmd: &str, args: &[&str]) -> Result<String> {

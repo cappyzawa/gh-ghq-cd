@@ -7,13 +7,13 @@ use serde_json::Value;
 use crate::command::{CommandRunner, SystemCommandRunner};
 use crate::environment::Environment;
 
-pub struct WindowConfig {
-    pub name: String,
-    pub start_dir: PathBuf,
+pub(super) struct WindowConfig {
+    pub(super) name: String,
+    pub(super) start_dir: PathBuf,
 }
 
 impl WindowConfig {
-    pub fn new<S: Into<String>, P: Into<PathBuf>>(name: S, start_dir: P) -> Self {
+    pub(super) fn new<S: Into<String>, P: Into<PathBuf>>(name: S, start_dir: P) -> Self {
         Self {
             name: name.into(),
             start_dir: start_dir.into(),
@@ -21,16 +21,16 @@ impl WindowConfig {
     }
 }
 
-pub trait Multiplexer {
+pub(super) trait Multiplexer {
     fn new_window(&self, cfg: &WindowConfig, pane_count: u8, horizontal: bool) -> Result<()>;
     fn rename_window(&self, name: &str) -> Result<()>;
     fn new_pane(&self, cfg: &WindowConfig, pane_count: u8, horizontal: bool) -> Result<()>;
     fn send_keys(&self, keys: &str) -> Result<()>;
 }
 
-pub struct TmuxClient;
-pub struct ZellijClient;
-pub struct NoopClient;
+pub(super) struct TmuxClient;
+pub(super) struct ZellijClient;
+pub(super) struct NoopClient;
 
 /// Drives herdr (https://herdr.dev) through its CLI.
 ///
@@ -38,7 +38,7 @@ pub struct NoopClient;
 /// target: every pane operation takes a pane ID. IDs of created panes only
 /// exist in the JSON response of the command that created them, so they are
 /// read out and carried here.
-pub struct HerdrClient<R: CommandRunner> {
+pub(super) struct HerdrClient<R: CommandRunner> {
     runner: R,
     workspace_id: Option<String>,
     pane_id: Option<String>,
@@ -46,7 +46,7 @@ pub struct HerdrClient<R: CommandRunner> {
 }
 
 impl HerdrClient<SystemCommandRunner> {
-    pub fn from_env(env: &dyn Environment) -> Self {
+    pub(super) fn from_env(env: &dyn Environment) -> Self {
         Self::with_runner(
             SystemCommandRunner,
             env.var("HERDR_WORKSPACE_ID"),
