@@ -29,8 +29,38 @@ impl CommandRunner for SystemCommandRunner {
             .with_context(|| format!("failed to run {}", cmd))?;
 
         if !output.status.success() {
-            bail!("{} failed", cmd);
+            // The only description of the failure is on stderr, which
+            // Command::output() captures instead of forwarding to the terminal.
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stderr = stderr.trim();
+            if stderr.is_empty() {
+                bail!("{} failed", cmd);
+            }
+            bail!("{} failed: {}", cmd, stderr);
         }
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_run_reports_stderr_of_a_failing_command() {
+        let err = SystemCommandRunner
+            .run("sh", &["-c", "echo boom >&2; exit 1"])
+            .unwrap_err();
+
+        assert_eq!(err.to_string(), "sh failed: boom");
+    }
+
+    #[test]
+    fn test_run_reports_a_failing_command_without_stderr() {
+        let err = SystemCommandRunner
+            .run("sh", &["-c", "exit 1"])
+            .unwrap_err();
+
+        assert_eq!(err.to_string(), "sh failed");
     }
 }

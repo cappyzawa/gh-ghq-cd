@@ -59,10 +59,10 @@ gh cd
 
 ### Terminal Multiplexer Integration
 
-When running inside a terminal multiplexer (tmux or zellij), you can use additional options. The tool automatically detects your environment via `TMUX` or `ZELLIJ` environment variables.
+When running inside a terminal multiplexer ([tmux](https://github.com/tmux/tmux), [zellij](https://github.com/zellij-org/zellij) or [herdr](https://herdr.dev)), you can use additional options. The tool automatically detects your environment via the `HERDR_ENV`, `TMUX` or `ZELLIJ` environment variables.
 
 ```bash
-# Open in new window (tmux) / tab (zellij)
+# Open in new window (tmux) / tab (zellij) / workspace (herdr)
 gh cd -w
 
 # Open in new pane (vertical split, default)
@@ -71,10 +71,10 @@ gh cd -p
 # Open in new pane with 2 sub-panes (vertical + horizontal split)
 gh cd -p 2
 
-# Open in new window/tab with pane split
+# Open in new window/tab/workspace with pane split
 gh cd -w -p
 
-# Open in new window/tab with 2 sub-panes
+# Open in new window/tab/workspace with 2 sub-panes
 gh cd -w -p 2
 ```
 
@@ -91,7 +91,7 @@ gh cd -p -H
 gh cd -p 2 -V    # vertical + top/bottom
 gh cd -p 2 -H    # horizontal + left/right
 
-# New window/tab with horizontal split
+# New window/tab/workspace with horizontal split
 gh cd -w -p -H
 gh cd -w -p 2 -H
 ```
