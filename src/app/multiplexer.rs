@@ -21,10 +21,34 @@ impl WindowConfig {
     }
 }
 
+/// Which of `-V` / `-H` the user asked for. The resulting geometry differs
+/// between splitting a window and splitting a pane, so each implementation
+/// maps this to its own directions rather than carrying one here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Orientation {
+    Vertical,
+    Horizontal,
+}
+
+/// How many panes `-p` asks for in the pane it opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PaneCount {
+    One,
+    Two,
+}
+
 pub(super) trait Multiplexer {
-    fn new_window(&self, cfg: &WindowConfig, pane_count: u8, horizontal: bool) -> Result<()>;
+    /// Opens a window (tab, workspace) and splits it in two when `split` is set.
+    fn new_window(&self, cfg: &WindowConfig, split: Option<Orientation>) -> Result<()>;
     fn rename_window(&self, name: &str) -> Result<()>;
-    fn new_pane(&self, cfg: &WindowConfig, pane_count: u8, horizontal: bool) -> Result<()>;
+    /// Opens a pane next to the calling one along `orientation`, split
+    /// perpendicularly again when `panes` asks for two.
+    fn new_pane(
+        &self,
+        cfg: &WindowConfig,
+        panes: PaneCount,
+        orientation: Orientation,
+    ) -> Result<()>;
     fn send_keys(&self, keys: &str) -> Result<()>;
 }
 
@@ -177,7 +201,7 @@ fn id_of(response: &Value, object: &str, field: &str) -> Result<String> {
 }
 
 impl<R: CommandRunner> Multiplexer for HerdrClient<R> {
-    fn new_window(&self, cfg: &WindowConfig, pane_count: u8, horizontal: bool) -> Result<()> {
+    fn new_window(&self, cfg: &WindowConfig, split: Option<Orientation>) -> Result<()> {
         let start_dir = cfg
             .start_dir
             .to_str()
@@ -200,21 +224,16 @@ impl<R: CommandRunner> Multiplexer for HerdrClient<R> {
         self.rename_pane(&root_pane, &cfg.name)?;
         *self.target_pane.borrow_mut() = Some(root_pane.clone());
 
-        // If pane_count >= 2, split the new workspace into 2 panes
-        if pane_count >= 2 {
-            // Split direction:
-            // - vertical (default): down (split top/bottom)
-            // - horizontal: right (split left/right)
-            let direction = if horizontal {
-                SplitDirection::Right
-            } else {
-                SplitDirection::Down
+        if let Some(orientation) = split {
+            let direction = match orientation {
+                Orientation::Vertical => SplitDirection::Down,
+                Orientation::Horizontal => SplitDirection::Right,
             };
-            let split = self.split_pane(&root_pane, direction, start_dir)?;
-            self.rename_pane(&split, &cfg.name)?;
+            let second_pane = self.split_pane(&root_pane, direction, start_dir)?;
+            self.rename_pane(&second_pane, &cfg.name)?;
 
             // Return to the first pane
-            self.focus_neighbor(&split, direction.back_arg())?;
+            self.focus_neighbor(&second_pane, direction.back_arg())?;
         }
 
         self.runner
@@ -233,7 +252,12 @@ impl<R: CommandRunner> Multiplexer for HerdrClient<R> {
         Ok(())
     }
 
-    fn new_pane(&self, cfg: &WindowConfig, pane_count: u8, horizontal: bool) -> Result<()> {
+    fn new_pane(
+        &self,
+        cfg: &WindowConfig,
+        panes: PaneCount,
+        orientation: Orientation,
+    ) -> Result<()> {
         let start_dir = cfg
             .start_dir
             .to_str()
@@ -243,19 +267,15 @@ impl<R: CommandRunner> Multiplexer for HerdrClient<R> {
             .as_deref()
             .context("HERDR_PANE_ID is not set")?;
 
-        // Primary split direction:
-        // - vertical (default): right (split left/right)
-        // - horizontal: down (split top/bottom)
-        let primary_direction = if horizontal {
-            SplitDirection::Down
-        } else {
-            SplitDirection::Right
+        let primary_direction = match orientation {
+            Orientation::Vertical => SplitDirection::Right,
+            Orientation::Horizontal => SplitDirection::Down,
         };
         let pane = self.split_pane(caller_pane, primary_direction, start_dir)?;
         self.rename_pane(&pane, &cfg.name)?;
         *self.target_pane.borrow_mut() = Some(pane.clone());
 
-        if pane_count >= 2 {
+        if panes == PaneCount::Two {
             let secondary_direction = primary_direction.perpendicular();
             let sub_pane = self.split_pane(&pane, secondary_direction, start_dir)?;
             self.rename_pane(&sub_pane, &cfg.name)?;
@@ -280,7 +300,7 @@ impl<R: CommandRunner> Multiplexer for HerdrClient<R> {
 }
 
 impl<R: CommandRunner> Multiplexer for TmuxClient<R> {
-    fn new_window(&self, cfg: &WindowConfig, pane_count: u8, horizontal: bool) -> Result<()> {
+    fn new_window(&self, cfg: &WindowConfig, split: Option<Orientation>) -> Result<()> {
         let start_dir = cfg
             .start_dir
             .to_str()
@@ -289,19 +309,20 @@ impl<R: CommandRunner> Multiplexer for TmuxClient<R> {
         self.runner
             .run("tmux", &["new-window", "-n", &cfg.name, "-c", start_dir])?;
 
-        // If pane_count >= 2, split the new window into 2 panes
-        // (the new window itself is the "lane", so we only need to split it)
-        if pane_count >= 2 {
-            // Split direction:
-            // - vertical (default): -v (split top/bottom)
-            // - horizontal: -h (split left/right)
-            let split = if horizontal { "-h" } else { "-v" };
+        // The new window itself is the "lane", so splitting it once is enough
+        if let Some(orientation) = split {
+            let split_flag = match orientation {
+                Orientation::Vertical => "-v",
+                Orientation::Horizontal => "-h",
+            };
             self.runner
-                .run("tmux", &["split-window", split, "-c", start_dir])?;
+                .run("tmux", &["split-window", split_flag, "-c", start_dir])?;
 
             // Navigate and set titles for both panes
-            let nav_to_first = if horizontal { "-L" } else { "-U" };
-            let nav_to_second = if horizontal { "-R" } else { "-D" };
+            let (nav_to_first, nav_to_second) = match orientation {
+                Orientation::Vertical => ("-U", "-D"),
+                Orientation::Horizontal => ("-L", "-R"),
+            };
 
             self.runner.run("tmux", &["select-pane", nav_to_first])?;
             self.runner.run("tmux", &["select-pane", "-T", &cfg.name])?;
@@ -324,33 +345,42 @@ impl<R: CommandRunner> Multiplexer for TmuxClient<R> {
         Ok(())
     }
 
-    fn new_pane(&self, cfg: &WindowConfig, pane_count: u8, horizontal: bool) -> Result<()> {
+    fn new_pane(
+        &self,
+        cfg: &WindowConfig,
+        panes: PaneCount,
+        orientation: Orientation,
+    ) -> Result<()> {
         let start_dir = cfg
             .start_dir
             .to_str()
             .context("repository path contains invalid UTF-8")?;
 
-        // Primary split direction:
-        // - vertical (default): -hf (horizontal split with full height, creates left/right)
-        // - horizontal: -vf (vertical split with full width, creates top/bottom)
-        let primary_split = if horizontal { "-vf" } else { "-hf" };
+        // -hf keeps the full height and creates left/right, -vf the full width
+        let primary_split = match orientation {
+            Orientation::Vertical => "-hf",
+            Orientation::Horizontal => "-vf",
+        };
         self.runner
             .run("tmux", &["split-window", primary_split, "-c", start_dir])?;
 
         // Set pane title for the new pane
         self.runner.run("tmux", &["select-pane", "-T", &cfg.name])?;
 
-        if pane_count >= 2 {
-            // Secondary split (perpendicular to primary):
-            // - vertical primary: -v (split top/bottom within the new pane)
-            // - horizontal primary: -h (split left/right within the new pane)
-            let secondary_split = if horizontal { "-h" } else { "-v" };
+        if panes == PaneCount::Two {
+            // Secondary split, perpendicular to the primary one
+            let secondary_split = match orientation {
+                Orientation::Vertical => "-v",
+                Orientation::Horizontal => "-h",
+            };
             self.runner
                 .run("tmux", &["split-window", secondary_split, "-c", start_dir])?;
 
             // Navigate and set titles for both sub-panes
-            let nav_to_first = if horizontal { "-L" } else { "-U" };
-            let nav_to_second = if horizontal { "-R" } else { "-D" };
+            let (nav_to_first, nav_to_second) = match orientation {
+                Orientation::Vertical => ("-U", "-D"),
+                Orientation::Horizontal => ("-L", "-R"),
+            };
 
             self.runner.run("tmux", &["select-pane", nav_to_first])?;
             self.runner.run("tmux", &["select-pane", "-T", &cfg.name])?;
@@ -375,7 +405,7 @@ impl<R: CommandRunner> Multiplexer for TmuxClient<R> {
 }
 
 impl<R: CommandRunner> Multiplexer for ZellijClient<R> {
-    fn new_window(&self, cfg: &WindowConfig, pane_count: u8, horizontal: bool) -> Result<()> {
+    fn new_window(&self, cfg: &WindowConfig, split: Option<Orientation>) -> Result<()> {
         let start_dir = cfg
             .start_dir
             .to_str()
@@ -390,12 +420,11 @@ impl<R: CommandRunner> Multiplexer for ZellijClient<R> {
         self.runner
             .run("zellij", &["action", "rename-pane", &cfg.name])?;
 
-        // If pane_count >= 2, split the new tab into 2 panes
-        if pane_count >= 2 {
-            // Split direction:
-            // - vertical (default): down (split top/bottom)
-            // - horizontal: right (split left/right)
-            let direction = if horizontal { "right" } else { "down" };
+        if let Some(orientation) = split {
+            let direction = match orientation {
+                Orientation::Vertical => "down",
+                Orientation::Horizontal => "right",
+            };
             self.runner.run(
                 "zellij",
                 &[
@@ -413,7 +442,10 @@ impl<R: CommandRunner> Multiplexer for ZellijClient<R> {
                 .run("zellij", &["action", "rename-pane", &cfg.name])?;
 
             // Move focus back to first pane
-            let focus_direction = if horizontal { "left" } else { "up" };
+            let focus_direction = match orientation {
+                Orientation::Vertical => "up",
+                Orientation::Horizontal => "left",
+            };
             self.runner
                 .run("zellij", &["action", "move-focus", focus_direction])?;
         }
@@ -426,16 +458,21 @@ impl<R: CommandRunner> Multiplexer for ZellijClient<R> {
         Ok(())
     }
 
-    fn new_pane(&self, cfg: &WindowConfig, pane_count: u8, horizontal: bool) -> Result<()> {
+    fn new_pane(
+        &self,
+        cfg: &WindowConfig,
+        panes: PaneCount,
+        orientation: Orientation,
+    ) -> Result<()> {
         let start_dir = cfg
             .start_dir
             .to_str()
             .context("repository path contains invalid UTF-8")?;
 
-        // Primary split direction:
-        // - vertical (default): right (split left/right)
-        // - horizontal: down (split top/bottom)
-        let primary_direction = if horizontal { "down" } else { "right" };
+        let primary_direction = match orientation {
+            Orientation::Vertical => "right",
+            Orientation::Horizontal => "down",
+        };
         self.runner.run(
             "zellij",
             &[
@@ -452,9 +489,12 @@ impl<R: CommandRunner> Multiplexer for ZellijClient<R> {
         self.runner
             .run("zellij", &["action", "rename-pane", &cfg.name])?;
 
-        if pane_count >= 2 {
-            // Secondary split (perpendicular to primary):
-            let secondary_direction = if horizontal { "right" } else { "down" };
+        if panes == PaneCount::Two {
+            // Secondary split, perpendicular to the primary one
+            let secondary_direction = match orientation {
+                Orientation::Vertical => "down",
+                Orientation::Horizontal => "right",
+            };
             self.runner.run(
                 "zellij",
                 &[
@@ -472,7 +512,10 @@ impl<R: CommandRunner> Multiplexer for ZellijClient<R> {
                 .run("zellij", &["action", "rename-pane", &cfg.name])?;
 
             // Move focus back to first sub-pane
-            let focus_direction = if horizontal { "left" } else { "up" };
+            let focus_direction = match orientation {
+                Orientation::Vertical => "up",
+                Orientation::Horizontal => "left",
+            };
             self.runner
                 .run("zellij", &["action", "move-focus", focus_direction])?;
         }
@@ -491,13 +534,13 @@ impl<R: CommandRunner> Multiplexer for ZellijClient<R> {
 }
 
 impl Multiplexer for NoopClient {
-    fn new_window(&self, _: &WindowConfig, _: u8, _: bool) -> Result<()> {
+    fn new_window(&self, _: &WindowConfig, _: Option<Orientation>) -> Result<()> {
         Ok(())
     }
     fn rename_window(&self, _: &str) -> Result<()> {
         Ok(())
     }
-    fn new_pane(&self, _: &WindowConfig, _: u8, _: bool) -> Result<()> {
+    fn new_pane(&self, _: &WindowConfig, _: PaneCount, _: Orientation) -> Result<()> {
         Ok(())
     }
     fn send_keys(&self, _: &str) -> Result<()> {
@@ -605,7 +648,7 @@ mod herdr_tests {
     fn test_new_window_creates_workspace_and_labels_root_pane() {
         let herdr = client(MockCommandRunner::new(&[CREATE_RESPONSE, RENAME_RESPONSE]));
 
-        herdr.new_window(&cfg(), 0, false).unwrap();
+        herdr.new_window(&cfg(), None).unwrap();
 
         herdr.runner.assert_calls(&[
             ("herdr", CREATE_CALL.to_vec()),
@@ -623,7 +666,9 @@ mod herdr_tests {
             RENAME_RESPONSE,
         ]));
 
-        herdr.new_window(&cfg(), 2, false).unwrap();
+        herdr
+            .new_window(&cfg(), Some(Orientation::Vertical))
+            .unwrap();
 
         herdr.runner.assert_calls(&[
             ("herdr", CREATE_CALL.to_vec()),
@@ -644,7 +689,9 @@ mod herdr_tests {
             RENAME_RESPONSE,
         ]));
 
-        herdr.new_window(&cfg(), 2, true).unwrap();
+        herdr
+            .new_window(&cfg(), Some(Orientation::Horizontal))
+            .unwrap();
 
         herdr.runner.assert_calls(&[
             ("herdr", CREATE_CALL.to_vec()),
@@ -663,7 +710,9 @@ mod herdr_tests {
             RENAME_RESPONSE,
         ]));
 
-        herdr.new_pane(&cfg(), 1, false).unwrap();
+        herdr
+            .new_pane(&cfg(), PaneCount::One, Orientation::Vertical)
+            .unwrap();
 
         herdr.runner.assert_calls(&[
             ("herdr", split_call("w0:p1", "right")),
@@ -681,7 +730,9 @@ mod herdr_tests {
             RENAME_RESPONSE,
         ]));
 
-        herdr.new_pane(&cfg(), 2, false).unwrap();
+        herdr
+            .new_pane(&cfg(), PaneCount::Two, Orientation::Vertical)
+            .unwrap();
 
         herdr.runner.assert_calls(&[
             ("herdr", split_call("w0:p1", "right")),
@@ -701,7 +752,9 @@ mod herdr_tests {
             RENAME_RESPONSE,
         ]));
 
-        herdr.new_pane(&cfg(), 2, true).unwrap();
+        herdr
+            .new_pane(&cfg(), PaneCount::Two, Orientation::Horizontal)
+            .unwrap();
 
         herdr.runner.assert_calls(&[
             ("herdr", split_call("w0:p1", "down")),
@@ -727,7 +780,7 @@ mod herdr_tests {
     fn test_send_keys_runs_the_command_in_the_primary_pane() {
         let herdr = client(MockCommandRunner::new(&[CREATE_RESPONSE, RENAME_RESPONSE]));
 
-        herdr.new_window(&cfg(), 0, false).unwrap();
+        herdr.new_window(&cfg(), None).unwrap();
         herdr.send_keys("claude").unwrap();
 
         herdr.runner.assert_calls(&[
@@ -747,7 +800,9 @@ mod herdr_tests {
             RENAME_RESPONSE,
         ]));
 
-        herdr.new_window(&cfg(), 2, false).unwrap();
+        herdr
+            .new_window(&cfg(), Some(Orientation::Vertical))
+            .unwrap();
         herdr.send_keys("claude").unwrap();
 
         herdr.runner.assert_calls(&[
@@ -768,7 +823,9 @@ mod herdr_tests {
             RENAME_RESPONSE,
         ]));
 
-        herdr.new_pane(&cfg(), 1, false).unwrap();
+        herdr
+            .new_pane(&cfg(), PaneCount::One, Orientation::Vertical)
+            .unwrap();
         herdr.send_keys("npm run dev").unwrap();
 
         herdr.runner.assert_calls(&[
@@ -792,7 +849,11 @@ mod herdr_tests {
         let herdr = HerdrClient::with_runner(MockCommandRunner::new(&[]), None, None);
 
         assert!(herdr.rename_window("repo").is_err());
-        assert!(herdr.new_pane(&cfg(), 1, false).is_err());
+        assert!(
+            herdr
+                .new_pane(&cfg(), PaneCount::One, Orientation::Vertical)
+                .is_err()
+        );
         herdr.runner.assert_calls(&[]);
     }
 
@@ -802,7 +863,7 @@ mod herdr_tests {
             r#"{"id":"cli:workspace:create","result":{"type":"workspace_created","workspace":{"workspace_id":"w3"}}}"#,
         ]));
 
-        let err = herdr.new_window(&cfg(), 0, false).unwrap_err();
+        let err = herdr.new_window(&cfg(), None).unwrap_err();
 
         assert_eq!(
             err.to_string(),
@@ -819,7 +880,7 @@ mod herdr_tests {
             r#"{"id":"cli:workspace:create","result":{"root_pane":{"pane_id":"w3:p1"},"type":"workspace_created"}}"#,
         ]));
 
-        let err = herdr.new_window(&cfg(), 0, false).unwrap_err();
+        let err = herdr.new_window(&cfg(), None).unwrap_err();
 
         assert_eq!(
             err.to_string(),
@@ -834,7 +895,7 @@ mod herdr_tests {
     fn test_new_window_stops_on_invalid_json() {
         let herdr = client(MockCommandRunner::new(&["not json"]));
 
-        let err = herdr.new_window(&cfg(), 0, false).unwrap_err();
+        let err = herdr.new_window(&cfg(), None).unwrap_err();
 
         assert_eq!(err.to_string(), "herdr returned invalid JSON");
         herdr
@@ -848,7 +909,9 @@ mod herdr_tests {
             r#"{"id":"cli:pane:split","result":{"type":"pane_info"}}"#,
         ]));
 
-        let err = herdr.new_pane(&cfg(), 1, false).unwrap_err();
+        let err = herdr
+            .new_pane(&cfg(), PaneCount::One, Orientation::Vertical)
+            .unwrap_err();
 
         assert_eq!(
             err.to_string(),
@@ -877,7 +940,7 @@ mod tmux_tests {
     fn test_new_window_pane_count_zero_only_creates_the_window() {
         let tmux = client(MockCommandRunner::new(&[]));
 
-        tmux.new_window(&cfg(), 0, false).unwrap();
+        tmux.new_window(&cfg(), None).unwrap();
 
         tmux.runner.assert_calls(&[(
             "tmux",
@@ -889,7 +952,8 @@ mod tmux_tests {
     fn test_new_window_pane_count_two_vertical_splits_top_bottom() {
         let tmux = client(MockCommandRunner::new(&[]));
 
-        tmux.new_window(&cfg(), 2, false).unwrap();
+        tmux.new_window(&cfg(), Some(Orientation::Vertical))
+            .unwrap();
 
         tmux.runner.assert_calls(&[
             (
@@ -910,7 +974,8 @@ mod tmux_tests {
     fn test_new_window_pane_count_two_horizontal_splits_left_right() {
         let tmux = client(MockCommandRunner::new(&[]));
 
-        tmux.new_window(&cfg(), 2, true).unwrap();
+        tmux.new_window(&cfg(), Some(Orientation::Horizontal))
+            .unwrap();
 
         tmux.runner.assert_calls(&[
             (
@@ -931,7 +996,8 @@ mod tmux_tests {
     fn test_new_pane_count_one_vertical_splits_the_calling_pane_left_right() {
         let tmux = client(MockCommandRunner::new(&[]));
 
-        tmux.new_pane(&cfg(), 1, false).unwrap();
+        tmux.new_pane(&cfg(), PaneCount::One, Orientation::Vertical)
+            .unwrap();
 
         tmux.runner.assert_calls(&[
             ("tmux", vec!["split-window", "-hf", "-c", "/repos/repo"]),
@@ -944,7 +1010,8 @@ mod tmux_tests {
     fn test_new_pane_count_two_vertical_splits_the_new_pane_perpendicularly() {
         let tmux = client(MockCommandRunner::new(&[]));
 
-        tmux.new_pane(&cfg(), 2, false).unwrap();
+        tmux.new_pane(&cfg(), PaneCount::Two, Orientation::Vertical)
+            .unwrap();
 
         tmux.runner.assert_calls(&[
             ("tmux", vec!["split-window", "-hf", "-c", "/repos/repo"]),
@@ -963,7 +1030,8 @@ mod tmux_tests {
     fn test_new_pane_count_two_horizontal_splits_the_new_pane_perpendicularly() {
         let tmux = client(MockCommandRunner::new(&[]));
 
-        tmux.new_pane(&cfg(), 2, true).unwrap();
+        tmux.new_pane(&cfg(), PaneCount::Two, Orientation::Horizontal)
+            .unwrap();
 
         tmux.runner.assert_calls(&[
             ("tmux", vec!["split-window", "-vf", "-c", "/repos/repo"]),
@@ -1009,7 +1077,7 @@ mod zellij_tests {
     fn test_new_window_pane_count_zero_only_creates_the_tab() {
         let zellij = client(MockCommandRunner::new(&[]));
 
-        zellij.new_window(&cfg(), 0, false).unwrap();
+        zellij.new_window(&cfg(), None).unwrap();
 
         zellij.runner.assert_calls(&[
             (
@@ -1031,7 +1099,9 @@ mod zellij_tests {
     fn test_new_window_pane_count_two_vertical_splits_downward() {
         let zellij = client(MockCommandRunner::new(&[]));
 
-        zellij.new_window(&cfg(), 2, false).unwrap();
+        zellij
+            .new_window(&cfg(), Some(Orientation::Vertical))
+            .unwrap();
 
         zellij.runner.assert_calls(&[
             (
@@ -1066,7 +1136,9 @@ mod zellij_tests {
     fn test_new_window_pane_count_two_horizontal_splits_rightward() {
         let zellij = client(MockCommandRunner::new(&[]));
 
-        zellij.new_window(&cfg(), 2, true).unwrap();
+        zellij
+            .new_window(&cfg(), Some(Orientation::Horizontal))
+            .unwrap();
 
         zellij.runner.assert_calls(&[
             (
@@ -1101,7 +1173,9 @@ mod zellij_tests {
     fn test_new_pane_count_one_vertical_splits_rightward() {
         let zellij = client(MockCommandRunner::new(&[]));
 
-        zellij.new_pane(&cfg(), 1, false).unwrap();
+        zellij
+            .new_pane(&cfg(), PaneCount::One, Orientation::Vertical)
+            .unwrap();
 
         zellij.runner.assert_calls(&[
             (
@@ -1123,7 +1197,9 @@ mod zellij_tests {
     fn test_new_pane_count_two_vertical_splits_the_new_pane_perpendicularly() {
         let zellij = client(MockCommandRunner::new(&[]));
 
-        zellij.new_pane(&cfg(), 2, false).unwrap();
+        zellij
+            .new_pane(&cfg(), PaneCount::Two, Orientation::Vertical)
+            .unwrap();
 
         zellij.runner.assert_calls(&[
             (
@@ -1158,7 +1234,9 @@ mod zellij_tests {
     fn test_new_pane_count_two_horizontal_splits_the_new_pane_perpendicularly() {
         let zellij = client(MockCommandRunner::new(&[]));
 
-        zellij.new_pane(&cfg(), 2, true).unwrap();
+        zellij
+            .new_pane(&cfg(), PaneCount::Two, Orientation::Horizontal)
+            .unwrap();
 
         zellij.runner.assert_calls(&[
             (
