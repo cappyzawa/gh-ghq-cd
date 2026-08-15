@@ -28,8 +28,38 @@ pub(super) trait Multiplexer {
     fn send_keys(&self, keys: &str) -> Result<()>;
 }
 
-pub(super) struct TmuxClient;
-pub(super) struct ZellijClient;
+pub(super) struct TmuxClient<R: CommandRunner> {
+    runner: R,
+}
+
+impl TmuxClient<SystemCommandRunner> {
+    pub(super) fn new() -> Self {
+        Self::with_runner(SystemCommandRunner)
+    }
+}
+
+impl<R: CommandRunner> TmuxClient<R> {
+    fn with_runner(runner: R) -> Self {
+        Self { runner }
+    }
+}
+
+pub(super) struct ZellijClient<R: CommandRunner> {
+    runner: R,
+}
+
+impl ZellijClient<SystemCommandRunner> {
+    pub(super) fn new() -> Self {
+        Self::with_runner(SystemCommandRunner)
+    }
+}
+
+impl<R: CommandRunner> ZellijClient<R> {
+    fn with_runner(runner: R) -> Self {
+        Self { runner }
+    }
+}
+
 pub(super) struct NoopClient;
 
 /// Drives herdr (https://herdr.dev) through its CLI.
@@ -249,15 +279,15 @@ impl<R: CommandRunner> Multiplexer for HerdrClient<R> {
     }
 }
 
-impl Multiplexer for TmuxClient {
+impl<R: CommandRunner> Multiplexer for TmuxClient<R> {
     fn new_window(&self, cfg: &WindowConfig, pane_count: u8, horizontal: bool) -> Result<()> {
-        let runner = SystemCommandRunner;
         let start_dir = cfg
             .start_dir
             .to_str()
             .context("repository path contains invalid UTF-8")?;
 
-        runner.run("tmux", &["new-window", "-n", &cfg.name, "-c", start_dir])?;
+        self.runner
+            .run("tmux", &["new-window", "-n", &cfg.name, "-c", start_dir])?;
 
         // If pane_count >= 2, split the new window into 2 panes
         // (the new window itself is the "lane", so we only need to split it)
@@ -266,36 +296,35 @@ impl Multiplexer for TmuxClient {
             // - vertical (default): -v (split top/bottom)
             // - horizontal: -h (split left/right)
             let split = if horizontal { "-h" } else { "-v" };
-            runner.run("tmux", &["split-window", split, "-c", start_dir])?;
+            self.runner
+                .run("tmux", &["split-window", split, "-c", start_dir])?;
 
             // Navigate and set titles for both panes
             let nav_to_first = if horizontal { "-L" } else { "-U" };
             let nav_to_second = if horizontal { "-R" } else { "-D" };
 
-            runner.run("tmux", &["select-pane", nav_to_first])?;
-            runner.run("tmux", &["select-pane", "-T", &cfg.name])?;
+            self.runner.run("tmux", &["select-pane", nav_to_first])?;
+            self.runner.run("tmux", &["select-pane", "-T", &cfg.name])?;
 
-            runner.run("tmux", &["select-pane", nav_to_second])?;
-            runner.run("tmux", &["select-pane", "-T", &cfg.name])?;
+            self.runner.run("tmux", &["select-pane", nav_to_second])?;
+            self.runner.run("tmux", &["select-pane", "-T", &cfg.name])?;
 
             // Return to first pane (focus)
-            runner.run("tmux", &["select-pane", nav_to_first])?;
+            self.runner.run("tmux", &["select-pane", nav_to_first])?;
 
             // Equalize pane sizes
-            runner.run("tmux", &["select-layout", "-E"])?;
+            self.runner.run("tmux", &["select-layout", "-E"])?;
         }
 
         Ok(())
     }
 
     fn rename_window(&self, name: &str) -> Result<()> {
-        let runner = SystemCommandRunner;
-        runner.run("tmux", &["rename-window", name])?;
+        self.runner.run("tmux", &["rename-window", name])?;
         Ok(())
     }
 
     fn new_pane(&self, cfg: &WindowConfig, pane_count: u8, horizontal: bool) -> Result<()> {
-        let runner = SystemCommandRunner;
         let start_dir = cfg
             .start_dir
             .to_str()
@@ -305,60 +334,61 @@ impl Multiplexer for TmuxClient {
         // - vertical (default): -hf (horizontal split with full height, creates left/right)
         // - horizontal: -vf (vertical split with full width, creates top/bottom)
         let primary_split = if horizontal { "-vf" } else { "-hf" };
-        runner.run("tmux", &["split-window", primary_split, "-c", start_dir])?;
+        self.runner
+            .run("tmux", &["split-window", primary_split, "-c", start_dir])?;
 
         // Set pane title for the new pane
-        runner.run("tmux", &["select-pane", "-T", &cfg.name])?;
+        self.runner.run("tmux", &["select-pane", "-T", &cfg.name])?;
 
         if pane_count >= 2 {
             // Secondary split (perpendicular to primary):
             // - vertical primary: -v (split top/bottom within the new pane)
             // - horizontal primary: -h (split left/right within the new pane)
             let secondary_split = if horizontal { "-h" } else { "-v" };
-            runner.run("tmux", &["split-window", secondary_split, "-c", start_dir])?;
+            self.runner
+                .run("tmux", &["split-window", secondary_split, "-c", start_dir])?;
 
             // Navigate and set titles for both sub-panes
             let nav_to_first = if horizontal { "-L" } else { "-U" };
             let nav_to_second = if horizontal { "-R" } else { "-D" };
 
-            runner.run("tmux", &["select-pane", nav_to_first])?;
-            runner.run("tmux", &["select-pane", "-T", &cfg.name])?;
+            self.runner.run("tmux", &["select-pane", nav_to_first])?;
+            self.runner.run("tmux", &["select-pane", "-T", &cfg.name])?;
 
-            runner.run("tmux", &["select-pane", nav_to_second])?;
-            runner.run("tmux", &["select-pane", "-T", &cfg.name])?;
+            self.runner.run("tmux", &["select-pane", nav_to_second])?;
+            self.runner.run("tmux", &["select-pane", "-T", &cfg.name])?;
 
             // Return to first sub-pane (focus)
-            runner.run("tmux", &["select-pane", nav_to_first])?;
+            self.runner.run("tmux", &["select-pane", nav_to_first])?;
         }
 
         // Equalize pane sizes
-        runner.run("tmux", &["select-layout", "-E"])?;
+        self.runner.run("tmux", &["select-layout", "-E"])?;
 
         Ok(())
     }
 
     fn send_keys(&self, keys: &str) -> Result<()> {
-        let runner = SystemCommandRunner;
-        runner.run("tmux", &["send-keys", keys, "Enter"])?;
+        self.runner.run("tmux", &["send-keys", keys, "Enter"])?;
         Ok(())
     }
 }
 
-impl Multiplexer for ZellijClient {
+impl<R: CommandRunner> Multiplexer for ZellijClient<R> {
     fn new_window(&self, cfg: &WindowConfig, pane_count: u8, horizontal: bool) -> Result<()> {
-        let runner = SystemCommandRunner;
         let start_dir = cfg
             .start_dir
             .to_str()
             .context("repository path contains invalid UTF-8")?;
 
-        runner.run(
+        self.runner.run(
             "zellij",
             &["action", "new-tab", "--name", &cfg.name, "--cwd", start_dir],
         )?;
 
         // Set pane name for the initial pane
-        runner.run("zellij", &["action", "rename-pane", &cfg.name])?;
+        self.runner
+            .run("zellij", &["action", "rename-pane", &cfg.name])?;
 
         // If pane_count >= 2, split the new tab into 2 panes
         if pane_count >= 2 {
@@ -366,7 +396,7 @@ impl Multiplexer for ZellijClient {
             // - vertical (default): down (split top/bottom)
             // - horizontal: right (split left/right)
             let direction = if horizontal { "right" } else { "down" };
-            runner.run(
+            self.runner.run(
                 "zellij",
                 &[
                     "action",
@@ -379,24 +409,24 @@ impl Multiplexer for ZellijClient {
             )?;
 
             // Set pane name for the new pane
-            runner.run("zellij", &["action", "rename-pane", &cfg.name])?;
+            self.runner
+                .run("zellij", &["action", "rename-pane", &cfg.name])?;
 
             // Move focus back to first pane
             let focus_direction = if horizontal { "left" } else { "up" };
-            runner.run("zellij", &["action", "move-focus", focus_direction])?;
+            self.runner
+                .run("zellij", &["action", "move-focus", focus_direction])?;
         }
 
         Ok(())
     }
 
     fn rename_window(&self, name: &str) -> Result<()> {
-        let runner = SystemCommandRunner;
-        runner.run("zellij", &["action", "rename-tab", name])?;
+        self.runner.run("zellij", &["action", "rename-tab", name])?;
         Ok(())
     }
 
     fn new_pane(&self, cfg: &WindowConfig, pane_count: u8, horizontal: bool) -> Result<()> {
-        let runner = SystemCommandRunner;
         let start_dir = cfg
             .start_dir
             .to_str()
@@ -406,7 +436,7 @@ impl Multiplexer for ZellijClient {
         // - vertical (default): right (split left/right)
         // - horizontal: down (split top/bottom)
         let primary_direction = if horizontal { "down" } else { "right" };
-        runner.run(
+        self.runner.run(
             "zellij",
             &[
                 "action",
@@ -419,12 +449,13 @@ impl Multiplexer for ZellijClient {
         )?;
 
         // Set pane name for the new pane
-        runner.run("zellij", &["action", "rename-pane", &cfg.name])?;
+        self.runner
+            .run("zellij", &["action", "rename-pane", &cfg.name])?;
 
         if pane_count >= 2 {
             // Secondary split (perpendicular to primary):
             let secondary_direction = if horizontal { "right" } else { "down" };
-            runner.run(
+            self.runner.run(
                 "zellij",
                 &[
                     "action",
@@ -437,22 +468,24 @@ impl Multiplexer for ZellijClient {
             )?;
 
             // Set pane name for the second pane
-            runner.run("zellij", &["action", "rename-pane", &cfg.name])?;
+            self.runner
+                .run("zellij", &["action", "rename-pane", &cfg.name])?;
 
             // Move focus back to first sub-pane
             let focus_direction = if horizontal { "left" } else { "up" };
-            runner.run("zellij", &["action", "move-focus", focus_direction])?;
+            self.runner
+                .run("zellij", &["action", "move-focus", focus_direction])?;
         }
 
         Ok(())
     }
 
     fn send_keys(&self, keys: &str) -> Result<()> {
-        let runner = SystemCommandRunner;
         // Write the command characters
-        runner.run("zellij", &["action", "write-chars", keys])?;
+        self.runner
+            .run("zellij", &["action", "write-chars", keys])?;
         // Send Enter key (newline = 10 in ASCII)
-        runner.run("zellij", &["action", "write", "10"])?;
+        self.runner.run("zellij", &["action", "write", "10"])?;
         Ok(())
     }
 }
@@ -472,31 +505,29 @@ impl Multiplexer for NoopClient {
     }
 }
 
+/// Shared across `herdr_tests`, `tmux_tests`, and `zellij_tests` so each
+/// client's tests can pin its issued command sequence without depending on
+/// a general-purpose mocking crate.
 #[cfg(test)]
-mod herdr_tests {
-    use super::*;
+mod test_support {
+    use crate::command::CommandRunner;
+    use anyhow::Result;
     use std::cell::RefCell;
 
-    const CREATE_RESPONSE: &str = r#"{"id":"cli:workspace:create","result":{"root_pane":{"pane_id":"w3:p1","tab_id":"w3:t1","workspace_id":"w3"},"tab":{"tab_id":"w3:t1"},"type":"workspace_created","workspace":{"workspace_id":"w3","label":"repo"}}}"#;
-    const SPLIT_P2_RESPONSE: &str = r#"{"id":"cli:pane:split","result":{"pane":{"pane_id":"w3:p2","tab_id":"w3:t1","workspace_id":"w3"},"type":"pane_info"}}"#;
-    const SPLIT_P3_RESPONSE: &str = r#"{"id":"cli:pane:split","result":{"pane":{"pane_id":"w3:p3","tab_id":"w3:t1","workspace_id":"w3"},"type":"pane_info"}}"#;
-    const RENAME_RESPONSE: &str =
-        r#"{"id":"cli:pane:rename","result":{"pane":{"pane_id":"w3:p1"},"type":"pane_info"}}"#;
-
-    struct MockCommandRunner {
+    pub(super) struct MockCommandRunner {
         responses: RefCell<Vec<String>>,
         calls: RefCell<Vec<(String, Vec<String>)>>,
     }
 
     impl MockCommandRunner {
-        fn new(responses: &[&str]) -> Self {
+        pub(super) fn new(responses: &[&str]) -> Self {
             Self {
                 responses: RefCell::new(responses.iter().map(|s| s.to_string()).collect()),
                 calls: RefCell::new(Vec::new()),
             }
         }
 
-        fn assert_calls(&self, expected: &[(&str, Vec<&str>)]) {
+        pub(super) fn assert_calls(&self, expected: &[(&str, Vec<&str>)]) {
             let actual = self.calls.borrow();
             let expected: Vec<(String, Vec<String>)> = expected
                 .iter()
@@ -525,6 +556,18 @@ mod herdr_tests {
             }
         }
     }
+}
+
+#[cfg(test)]
+mod herdr_tests {
+    use super::test_support::MockCommandRunner;
+    use super::*;
+
+    const CREATE_RESPONSE: &str = r#"{"id":"cli:workspace:create","result":{"root_pane":{"pane_id":"w3:p1","tab_id":"w3:t1","workspace_id":"w3"},"tab":{"tab_id":"w3:t1"},"type":"workspace_created","workspace":{"workspace_id":"w3","label":"repo"}}}"#;
+    const SPLIT_P2_RESPONSE: &str = r#"{"id":"cli:pane:split","result":{"pane":{"pane_id":"w3:p2","tab_id":"w3:t1","workspace_id":"w3"},"type":"pane_info"}}"#;
+    const SPLIT_P3_RESPONSE: &str = r#"{"id":"cli:pane:split","result":{"pane":{"pane_id":"w3:p3","tab_id":"w3:t1","workspace_id":"w3"},"type":"pane_info"}}"#;
+    const RENAME_RESPONSE: &str =
+        r#"{"id":"cli:pane:rename","result":{"pane":{"pane_id":"w3:p1"},"type":"pane_info"}}"#;
 
     fn cfg() -> WindowConfig {
         WindowConfig::new("repo", "/repos/repo")
@@ -814,5 +857,349 @@ mod herdr_tests {
         herdr
             .runner
             .assert_calls(&[("herdr", split_call("w0:p1", "right"))]);
+    }
+}
+
+#[cfg(test)]
+mod tmux_tests {
+    use super::test_support::MockCommandRunner;
+    use super::*;
+
+    fn cfg() -> WindowConfig {
+        WindowConfig::new("repo", "/repos/repo")
+    }
+
+    fn client(runner: MockCommandRunner) -> TmuxClient<MockCommandRunner> {
+        TmuxClient::with_runner(runner)
+    }
+
+    #[test]
+    fn test_new_window_pane_count_zero_only_creates_the_window() {
+        let tmux = client(MockCommandRunner::new(&[]));
+
+        tmux.new_window(&cfg(), 0, false).unwrap();
+
+        tmux.runner.assert_calls(&[(
+            "tmux",
+            vec!["new-window", "-n", "repo", "-c", "/repos/repo"],
+        )]);
+    }
+
+    #[test]
+    fn test_new_window_pane_count_two_vertical_splits_top_bottom() {
+        let tmux = client(MockCommandRunner::new(&[]));
+
+        tmux.new_window(&cfg(), 2, false).unwrap();
+
+        tmux.runner.assert_calls(&[
+            (
+                "tmux",
+                vec!["new-window", "-n", "repo", "-c", "/repos/repo"],
+            ),
+            ("tmux", vec!["split-window", "-v", "-c", "/repos/repo"]),
+            ("tmux", vec!["select-pane", "-U"]),
+            ("tmux", vec!["select-pane", "-T", "repo"]),
+            ("tmux", vec!["select-pane", "-D"]),
+            ("tmux", vec!["select-pane", "-T", "repo"]),
+            ("tmux", vec!["select-pane", "-U"]),
+            ("tmux", vec!["select-layout", "-E"]),
+        ]);
+    }
+
+    #[test]
+    fn test_new_window_pane_count_two_horizontal_splits_left_right() {
+        let tmux = client(MockCommandRunner::new(&[]));
+
+        tmux.new_window(&cfg(), 2, true).unwrap();
+
+        tmux.runner.assert_calls(&[
+            (
+                "tmux",
+                vec!["new-window", "-n", "repo", "-c", "/repos/repo"],
+            ),
+            ("tmux", vec!["split-window", "-h", "-c", "/repos/repo"]),
+            ("tmux", vec!["select-pane", "-L"]),
+            ("tmux", vec!["select-pane", "-T", "repo"]),
+            ("tmux", vec!["select-pane", "-R"]),
+            ("tmux", vec!["select-pane", "-T", "repo"]),
+            ("tmux", vec!["select-pane", "-L"]),
+            ("tmux", vec!["select-layout", "-E"]),
+        ]);
+    }
+
+    #[test]
+    fn test_new_pane_count_one_vertical_splits_the_calling_pane_left_right() {
+        let tmux = client(MockCommandRunner::new(&[]));
+
+        tmux.new_pane(&cfg(), 1, false).unwrap();
+
+        tmux.runner.assert_calls(&[
+            ("tmux", vec!["split-window", "-hf", "-c", "/repos/repo"]),
+            ("tmux", vec!["select-pane", "-T", "repo"]),
+            ("tmux", vec!["select-layout", "-E"]),
+        ]);
+    }
+
+    #[test]
+    fn test_new_pane_count_two_vertical_splits_the_new_pane_perpendicularly() {
+        let tmux = client(MockCommandRunner::new(&[]));
+
+        tmux.new_pane(&cfg(), 2, false).unwrap();
+
+        tmux.runner.assert_calls(&[
+            ("tmux", vec!["split-window", "-hf", "-c", "/repos/repo"]),
+            ("tmux", vec!["select-pane", "-T", "repo"]),
+            ("tmux", vec!["split-window", "-v", "-c", "/repos/repo"]),
+            ("tmux", vec!["select-pane", "-U"]),
+            ("tmux", vec!["select-pane", "-T", "repo"]),
+            ("tmux", vec!["select-pane", "-D"]),
+            ("tmux", vec!["select-pane", "-T", "repo"]),
+            ("tmux", vec!["select-pane", "-U"]),
+            ("tmux", vec!["select-layout", "-E"]),
+        ]);
+    }
+
+    #[test]
+    fn test_new_pane_count_two_horizontal_splits_the_new_pane_perpendicularly() {
+        let tmux = client(MockCommandRunner::new(&[]));
+
+        tmux.new_pane(&cfg(), 2, true).unwrap();
+
+        tmux.runner.assert_calls(&[
+            ("tmux", vec!["split-window", "-vf", "-c", "/repos/repo"]),
+            ("tmux", vec!["select-pane", "-T", "repo"]),
+            ("tmux", vec!["split-window", "-h", "-c", "/repos/repo"]),
+            ("tmux", vec!["select-pane", "-L"]),
+            ("tmux", vec!["select-pane", "-T", "repo"]),
+            ("tmux", vec!["select-pane", "-R"]),
+            ("tmux", vec!["select-pane", "-T", "repo"]),
+            ("tmux", vec!["select-pane", "-L"]),
+            ("tmux", vec!["select-layout", "-E"]),
+        ]);
+    }
+
+    #[test]
+    fn test_rename_window_and_send_keys_issue_their_commands() {
+        let tmux = client(MockCommandRunner::new(&[]));
+
+        tmux.rename_window("repo").unwrap();
+        tmux.send_keys("claude").unwrap();
+
+        tmux.runner.assert_calls(&[
+            ("tmux", vec!["rename-window", "repo"]),
+            ("tmux", vec!["send-keys", "claude", "Enter"]),
+        ]);
+    }
+}
+
+#[cfg(test)]
+mod zellij_tests {
+    use super::test_support::MockCommandRunner;
+    use super::*;
+
+    fn cfg() -> WindowConfig {
+        WindowConfig::new("repo", "/repos/repo")
+    }
+
+    fn client(runner: MockCommandRunner) -> ZellijClient<MockCommandRunner> {
+        ZellijClient::with_runner(runner)
+    }
+
+    #[test]
+    fn test_new_window_pane_count_zero_only_creates_the_tab() {
+        let zellij = client(MockCommandRunner::new(&[]));
+
+        zellij.new_window(&cfg(), 0, false).unwrap();
+
+        zellij.runner.assert_calls(&[
+            (
+                "zellij",
+                vec![
+                    "action",
+                    "new-tab",
+                    "--name",
+                    "repo",
+                    "--cwd",
+                    "/repos/repo",
+                ],
+            ),
+            ("zellij", vec!["action", "rename-pane", "repo"]),
+        ]);
+    }
+
+    #[test]
+    fn test_new_window_pane_count_two_vertical_splits_downward() {
+        let zellij = client(MockCommandRunner::new(&[]));
+
+        zellij.new_window(&cfg(), 2, false).unwrap();
+
+        zellij.runner.assert_calls(&[
+            (
+                "zellij",
+                vec![
+                    "action",
+                    "new-tab",
+                    "--name",
+                    "repo",
+                    "--cwd",
+                    "/repos/repo",
+                ],
+            ),
+            ("zellij", vec!["action", "rename-pane", "repo"]),
+            (
+                "zellij",
+                vec![
+                    "action",
+                    "new-pane",
+                    "--direction",
+                    "down",
+                    "--cwd",
+                    "/repos/repo",
+                ],
+            ),
+            ("zellij", vec!["action", "rename-pane", "repo"]),
+            ("zellij", vec!["action", "move-focus", "up"]),
+        ]);
+    }
+
+    #[test]
+    fn test_new_window_pane_count_two_horizontal_splits_rightward() {
+        let zellij = client(MockCommandRunner::new(&[]));
+
+        zellij.new_window(&cfg(), 2, true).unwrap();
+
+        zellij.runner.assert_calls(&[
+            (
+                "zellij",
+                vec![
+                    "action",
+                    "new-tab",
+                    "--name",
+                    "repo",
+                    "--cwd",
+                    "/repos/repo",
+                ],
+            ),
+            ("zellij", vec!["action", "rename-pane", "repo"]),
+            (
+                "zellij",
+                vec![
+                    "action",
+                    "new-pane",
+                    "--direction",
+                    "right",
+                    "--cwd",
+                    "/repos/repo",
+                ],
+            ),
+            ("zellij", vec!["action", "rename-pane", "repo"]),
+            ("zellij", vec!["action", "move-focus", "left"]),
+        ]);
+    }
+
+    #[test]
+    fn test_new_pane_count_one_vertical_splits_rightward() {
+        let zellij = client(MockCommandRunner::new(&[]));
+
+        zellij.new_pane(&cfg(), 1, false).unwrap();
+
+        zellij.runner.assert_calls(&[
+            (
+                "zellij",
+                vec![
+                    "action",
+                    "new-pane",
+                    "--direction",
+                    "right",
+                    "--cwd",
+                    "/repos/repo",
+                ],
+            ),
+            ("zellij", vec!["action", "rename-pane", "repo"]),
+        ]);
+    }
+
+    #[test]
+    fn test_new_pane_count_two_vertical_splits_the_new_pane_perpendicularly() {
+        let zellij = client(MockCommandRunner::new(&[]));
+
+        zellij.new_pane(&cfg(), 2, false).unwrap();
+
+        zellij.runner.assert_calls(&[
+            (
+                "zellij",
+                vec![
+                    "action",
+                    "new-pane",
+                    "--direction",
+                    "right",
+                    "--cwd",
+                    "/repos/repo",
+                ],
+            ),
+            ("zellij", vec!["action", "rename-pane", "repo"]),
+            (
+                "zellij",
+                vec![
+                    "action",
+                    "new-pane",
+                    "--direction",
+                    "down",
+                    "--cwd",
+                    "/repos/repo",
+                ],
+            ),
+            ("zellij", vec!["action", "rename-pane", "repo"]),
+            ("zellij", vec!["action", "move-focus", "up"]),
+        ]);
+    }
+
+    #[test]
+    fn test_new_pane_count_two_horizontal_splits_the_new_pane_perpendicularly() {
+        let zellij = client(MockCommandRunner::new(&[]));
+
+        zellij.new_pane(&cfg(), 2, true).unwrap();
+
+        zellij.runner.assert_calls(&[
+            (
+                "zellij",
+                vec![
+                    "action",
+                    "new-pane",
+                    "--direction",
+                    "down",
+                    "--cwd",
+                    "/repos/repo",
+                ],
+            ),
+            ("zellij", vec!["action", "rename-pane", "repo"]),
+            (
+                "zellij",
+                vec![
+                    "action",
+                    "new-pane",
+                    "--direction",
+                    "right",
+                    "--cwd",
+                    "/repos/repo",
+                ],
+            ),
+            ("zellij", vec!["action", "rename-pane", "repo"]),
+            ("zellij", vec!["action", "move-focus", "left"]),
+        ]);
+    }
+
+    #[test]
+    fn test_rename_window_and_send_keys_issue_their_commands() {
+        let zellij = client(MockCommandRunner::new(&[]));
+
+        zellij.rename_window("repo").unwrap();
+        zellij.send_keys("claude").unwrap();
+
+        zellij.runner.assert_calls(&[
+            ("zellij", vec!["action", "rename-tab", "repo"]),
+            ("zellij", vec!["action", "write-chars", "claude"]),
+            ("zellij", vec!["action", "write", "10"]),
+        ]);
     }
 }

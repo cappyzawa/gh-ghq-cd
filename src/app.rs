@@ -163,8 +163,8 @@ pub(super) fn run() -> Result<()> {
 
     let mux: Box<dyn Multiplexer> = match multiplexer {
         MultiplexerKind::Herdr => Box::new(HerdrClient::from_env(&env)),
-        MultiplexerKind::Zellij => Box::new(ZellijClient),
-        MultiplexerKind::Tmux => Box::new(TmuxClient),
+        MultiplexerKind::Zellij => Box::new(ZellijClient::new()),
+        MultiplexerKind::Tmux => Box::new(TmuxClient::new()),
         MultiplexerKind::None => Box::new(NoopClient),
     };
 
