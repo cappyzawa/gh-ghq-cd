@@ -5,7 +5,9 @@ use std::path::Path;
 
 use crate::command::{CommandChecker, CommandRunner, SystemCommandChecker, SystemCommandRunner};
 use crate::environment::{Environment, SystemEnvironment};
-use crate::multiplexer::{Multiplexer, NoopClient, TmuxClient, WindowConfig, ZellijClient};
+use crate::multiplexer::{
+    HerdrClient, Multiplexer, NoopClient, TmuxClient, WindowConfig, ZellijClient,
+};
 use crate::selection::select_repository;
 use crate::shell;
 
@@ -25,7 +27,7 @@ pub enum TmuxMode {
 #[command(name = "gh-ghq-cd")]
 #[command(about = "cd into ghq managed repositories")]
 struct Args {
-    /// Open in new tmux window (only works inside tmux)
+    /// Open in new window (tmux) / tab (zellij) / workspace (herdr)
     #[arg(short = 'w', long = "new-window")]
     new_window: bool,
 
@@ -33,7 +35,7 @@ struct Args {
     #[arg(short = 'n', hide = true)]
     deprecated_new_window: bool,
 
-    /// Open in new tmux pane (1 = single pane, 2 = split into 2 panes)
+    /// Open in new pane (1 = single pane, 2 = split into 2 panes)
     #[arg(short = 'p', long = "new-pane", num_args = 0..=1, default_missing_value = "1", value_parser = clap::value_parser!(u8).range(1..=2))]
     new_pane: Option<u8>,
 
@@ -90,6 +92,27 @@ impl Args {
     }
 }
 
+/// Terminal multiplexer the tool is running inside
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MultiplexerKind {
+    Herdr,
+    Zellij,
+    Tmux,
+    None,
+}
+
+fn detect_multiplexer(env: &dyn Environment) -> MultiplexerKind {
+    if env.var("HERDR_ENV").is_some() {
+        MultiplexerKind::Herdr
+    } else if env.var("ZELLIJ").is_some() {
+        MultiplexerKind::Zellij
+    } else if env.var("TMUX").is_some() {
+        MultiplexerKind::Tmux
+    } else {
+        MultiplexerKind::None
+    }
+}
+
 /// Entry point for the application
 pub fn run() -> Result<()> {
     let mut has_deprecated_nw = false;
@@ -134,17 +157,14 @@ pub fn run() -> Result<()> {
     let checker = SystemCommandChecker;
     let runner = SystemCommandRunner;
 
-    // Check if running inside a terminal multiplexer
-    let use_tmux = env.var("TMUX").is_some();
-    let use_zellij = env.var("ZELLIJ").is_some();
-    let use_multiplexer = use_tmux || use_zellij;
+    let multiplexer = detect_multiplexer(&env);
+    let use_multiplexer = multiplexer != MultiplexerKind::None;
 
-    let mux: Box<dyn Multiplexer> = if use_zellij {
-        Box::new(ZellijClient)
-    } else if use_tmux {
-        Box::new(TmuxClient)
-    } else {
-        Box::new(NoopClient)
+    let mux: Box<dyn Multiplexer> = match multiplexer {
+        MultiplexerKind::Herdr => Box::new(HerdrClient::from_env(&env)),
+        MultiplexerKind::Zellij => Box::new(ZellijClient),
+        MultiplexerKind::Tmux => Box::new(TmuxClient),
+        MultiplexerKind::None => Box::new(NoopClient),
     };
 
     let mode = args.tmux_mode();
@@ -409,6 +429,34 @@ mod tests {
         assert_eq!(tmux.new_window_calls.borrow().len(), 1);
         assert_eq!(tmux.send_keys_calls.borrow().len(), 1);
         assert_eq!(tmux.send_keys_calls.borrow()[0], "claude");
+    }
+
+    #[test]
+    fn test_detect_multiplexer_prefers_herdr() {
+        let mut env = MockEnvironment::new();
+        env.vars.insert("HERDR_ENV".to_string(), "1".to_string());
+        env.vars.insert("ZELLIJ".to_string(), "0".to_string());
+        env.vars
+            .insert("TMUX".to_string(), "/tmp/tmux-501,1,0".to_string());
+
+        assert_eq!(detect_multiplexer(&env), MultiplexerKind::Herdr);
+    }
+
+    #[test]
+    fn test_detect_multiplexer_prefers_zellij_over_tmux() {
+        let mut env = MockEnvironment::new();
+        env.vars.insert("ZELLIJ".to_string(), "0".to_string());
+        env.vars
+            .insert("TMUX".to_string(), "/tmp/tmux-501,1,0".to_string());
+
+        assert_eq!(detect_multiplexer(&env), MultiplexerKind::Zellij);
+    }
+
+    #[test]
+    fn test_detect_multiplexer_without_a_multiplexer() {
+        let env = MockEnvironment::new();
+
+        assert_eq!(detect_multiplexer(&env), MultiplexerKind::None);
     }
 
     #[test]
